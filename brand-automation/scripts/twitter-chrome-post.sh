@@ -7,12 +7,14 @@ DRY_RUN=1
 DRAFT_NUM=""
 TEXT=""
 BROWSER="chrome"
+PUBLISHER="openclaw"
+TRIGGER_MODE="manual"
 
 usage() {
   cat <<USAGE
 Uso:
-  twitter-chrome-post.sh --draft <n> [--yes] [--browser chrome|safari|brave|default]
-  twitter-chrome-post.sh --text "mensaje" [--yes] [--browser chrome|safari|brave|default]
+  twitter-chrome-post.sh --draft <n> [--yes] [--browser chrome|safari|brave|default] [--publisher <origen>] [--trigger <modo>]
+  twitter-chrome-post.sh --text "mensaje" [--yes] [--browser chrome|safari|brave|default] [--publisher <origen>] [--trigger <modo>]
 
 Notas:
   --yes    Publica realmente (intento automático solo en Chrome).
@@ -69,6 +71,10 @@ open_intent() {
   echo "OPENED intent_url manual_post_required browser=$BROWSER"
 }
 
+prefix_text() {
+  printf '[pub:%s|trigger:%s] ' "$PUBLISHER" "$TRIGGER_MODE"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --draft)
@@ -85,6 +91,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --browser)
       BROWSER="${2:-}"
+      shift 2
+      ;;
+    --publisher)
+      PUBLISHER="${2:-}"
+      shift 2
+      ;;
+    --trigger)
+      TRIGGER_MODE="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -128,24 +142,27 @@ if [[ -z "$TEXT" ]]; then
   exit 1
 fi
 
-LEN=$(printf '%s' "$TEXT" | wc -m | tr -d ' ')
+PREFIX="$(prefix_text)"
+FINAL_TEXT="${PREFIX}${TEXT}"
+
+LEN=$(printf '%s' "$FINAL_TEXT" | wc -m | tr -d ' ')
 if [[ "$LEN" -gt 280 ]]; then
-  echo "El mensaje excede 280 caracteres ($LEN)." >&2
+  echo "El mensaje con prefijo excede 280 caracteres ($LEN)." >&2
   exit 1
 fi
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
-  echo "DRY_RUN tweet_text=$TEXT"
+  echo "DRY_RUN tweet_text=$FINAL_TEXT"
   exit 0
 fi
 
 # Auto-post solo para Chrome; otros navegadores abren intent prellenado.
 if [[ "$BROWSER" != "chrome" ]]; then
-  open_intent "$TEXT"
+  open_intent "$FINAL_TEXT"
   exit 0
 fi
 
-TEXT_JSON="$(printf '%s' "$TEXT" | jq -Rs .)"
+TEXT_JSON="$(printf '%s' "$FINAL_TEXT" | jq -Rs .)"
 set +e
 OSA_OUT="$(osascript - "$TEXT_JSON" <<'OSA' 2>&1
 on run argv

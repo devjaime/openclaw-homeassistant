@@ -31,10 +31,10 @@ run_and_route() {
 if [[ "$LC_MSG" =~ ^(publica|tweet|x)[[:space:]]+(draft|borrador)[[:space:]]+([0-9]+)(.*)$ ]]; then
   N="${BASH_REMATCH[3]}"
   if [[ "$LC_MSG" == *"confirmar"* || "$LC_MSG" == *"publica ahora"* ]]; then
-    OUT="$($BASE/twitter-chrome-post.sh --draft "$N" --yes --browser "$BROWSER")"
+    OUT="$($BASE/twitter-chrome-post.sh --draft "$N" --yes --browser "$BROWSER" --publisher telegram --trigger gatillado)"
     run_and_route "$OUT"
   else
-    OUT="$($BASE/twitter-chrome-post.sh --draft "$N")"
+    OUT="$($BASE/twitter-chrome-post.sh --draft "$N" --publisher telegram --trigger gatillado)"
     echo "$OUT"
     echo "ROUTED twitter-post draft=$N mode=preview browser=$BROWSER"
   fi
@@ -44,10 +44,10 @@ fi
 if [[ "$LC_MSG" =~ ^(publica|tweet|x)[[:space:]]+texto:[[:space:]]+(.+)$ ]]; then
   TXT="${BASH_REMATCH[2]}"
   if [[ "$LC_MSG" == *"confirmar"* || "$LC_MSG" == *"publica ahora"* ]]; then
-    OUT="$($BASE/twitter-chrome-post.sh --text "$TXT" --yes --browser "$BROWSER")"
+    OUT="$($BASE/twitter-chrome-post.sh --text "$TXT" --yes --browser "$BROWSER" --publisher telegram --trigger gatillado)"
     run_and_route "$OUT"
   else
-    OUT="$($BASE/twitter-chrome-post.sh --text "$TXT")"
+    OUT="$($BASE/twitter-chrome-post.sh --text "$TXT" --publisher telegram --trigger gatillado)"
     echo "$OUT"
     echo "ROUTED twitter-post mode=preview browser=$BROWSER"
   fi

@@ -20,6 +20,12 @@ Si devuelve:
 - `ROUTED twitter-post ... mode=manual-open` -> responder `✅ Abrí X con el texto prellenado. Solo falta presionar Publicar.`
 - `NOOP no-twitter-intent` -> continuar con reglas siguientes.
 
+Nota de trazabilidad:
+- Los tweets enviados por este flujo deben incluir prefijo:
+`[pub:telegram|trigger:gatillado]`.
+- Flujos automáticos no interactivos deben usar:
+`[pub:openclaw|trigger:automatico]`.
+
 1. Si el usuario escribe una frase con intención Alexa, ejecuta:
 `/Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant/homeassistant-tools/alexa-intent.sh "<mensaje_usuario>"`
 

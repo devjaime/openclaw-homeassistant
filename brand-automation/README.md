@@ -64,12 +64,16 @@ Script:
 ## Publicar en X/Twitter sin API (Chrome logueado)
 
 Usa tu sesión ya abierta en Chrome. El script publica solo con `--yes`.
+Ahora agrega prefijo de trazabilidad en cada tweet:
+- Telegram gatillado: `[pub:telegram|trigger:gatillado] ...`
+- OpenClaw automático: `[pub:openclaw|trigger:automatico] ...`
 
 ```bash
 ./twitter-chrome-post.sh --draft 1          # preview
 ./twitter-chrome-post.sh --draft 1 --yes    # publica
 ./twitter-chrome-post.sh --text "Hola X"    # preview
 ./twitter-chrome-post.sh --text "Hola X" --yes
+./twitter-chrome-post.sh --text "Hola X" --publisher openclaw --trigger automatico
 ```
 
 Router para Telegram:
