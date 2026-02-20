@@ -78,6 +78,8 @@ Router para Telegram:
 ./twitter-intent.sh "publica draft 1"                 # preview
 ./twitter-intent.sh "publica draft 1 confirmar"       # publica
 ./twitter-intent.sh "tweet texto: avance en openclaw" # preview
+./twitter-intent.sh "publica texto: avance confirmar safari" # abre Safari prellenado
+./twitter-intent.sh "publica texto: avance confirmar brave"  # abre Brave prellenado
 ```
 
 ## Sincronizar en Obsidian

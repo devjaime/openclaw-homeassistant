@@ -17,6 +17,7 @@ Si devuelve:
 Si devuelve:
 - `ROUTED twitter-post ... mode=preview` -> responder con preview y pedir confirmación.
 - `ROUTED twitter-post ... mode=publish` -> responder `✅ Tweet publicado en X.`
+- `ROUTED twitter-post ... mode=manual-open` -> responder `✅ Abrí X con el texto prellenado. Solo falta presionar Publicar.`
 - `NOOP no-twitter-intent` -> continuar con reglas siguientes.
 
 1. Si el usuario escribe una frase con intención Alexa, ejecuta:

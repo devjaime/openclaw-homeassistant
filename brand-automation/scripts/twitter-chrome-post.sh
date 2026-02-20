@@ -6,15 +6,17 @@ DRAFTS_DIR="$BASE/drafts"
 DRY_RUN=1
 DRAFT_NUM=""
 TEXT=""
+BROWSER="chrome"
 
 usage() {
   cat <<USAGE
 Uso:
-  twitter-chrome-post.sh --draft <n> [--yes]
-  twitter-chrome-post.sh --text "mensaje" [--yes]
+  twitter-chrome-post.sh --draft <n> [--yes] [--browser chrome|safari|brave|default]
+  twitter-chrome-post.sh --text "mensaje" [--yes] [--browser chrome|safari|brave|default]
 
 Notas:
-  --yes    Publica realmente. Sin --yes solo muestra preview.
+  --yes    Publica realmente (intento automático solo en Chrome).
+           Si falla, abre tweet prellenado para publicación manual.
 USAGE
 }
 
@@ -29,14 +31,42 @@ extract_draft_text() {
   local idx="$2"
   awk -v i="$idx" '
     match($0,/^- *Draft *([0-9]+): *(.*)$/,m) {
-      if (m[1] == i) {
-        print m[2]
-        found=1
-        exit
-      }
+      if (m[1] == i) { print m[2]; found=1; exit }
     }
     END { if (!found) exit 2 }
   ' "$file"
+}
+
+urlencode() {
+  jq -rn --arg v "$1" '$v|@uri'
+}
+
+open_intent() {
+  local msg="$1"
+  local enc url
+  enc="$(urlencode "$msg")"
+  url="https://x.com/intent/tweet?text=${enc}"
+
+  case "$BROWSER" in
+    chrome)
+      open -a "Google Chrome" "$url"
+      ;;
+    safari)
+      open -a "Safari" "$url"
+      ;;
+    brave)
+      open -a "Brave Browser" "$url"
+      ;;
+    default)
+      open "$url"
+      ;;
+    *)
+      echo "Browser no soportado: $BROWSER" >&2
+      exit 1
+      ;;
+  esac
+
+  echo "OPENED intent_url manual_post_required browser=$BROWSER"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -52,6 +82,10 @@ while [[ $# -gt 0 ]]; do
     --yes)
       DRY_RUN=0
       shift
+      ;;
+    --browser)
+      BROWSER="${2:-}"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -105,9 +139,15 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   exit 0
 fi
 
-TEXT_JSON="$(printf '%s' "$TEXT" | jq -Rs .)"
+# Auto-post solo para Chrome; otros navegadores abren intent prellenado.
+if [[ "$BROWSER" != "chrome" ]]; then
+  open_intent "$TEXT"
+  exit 0
+fi
 
-osascript - "$TEXT_JSON" <<'OSA'
+TEXT_JSON="$(printf '%s' "$TEXT" | jq -Rs .)"
+set +e
+OSA_OUT="$(osascript - "$TEXT_JSON" <<'OSA' 2>&1
 on run argv
 set textJson to item 1 of argv
 
@@ -140,5 +180,17 @@ end tell
 return clickState
 end run
 OSA
+)"
+OSA_CODE=$?
+set -e
+
+if [[ "$OSA_CODE" -ne 0 ]]; then
+  if printf '%s' "$OSA_OUT" | rg -qi "JavaScript.*AppleScript.*desactivada|AppleScript"; then
+    open_intent "$TEXT"
+    exit 0
+  fi
+  echo "$OSA_OUT" >&2
+  exit 1
+fi
 
 printf 'POSTED ok len=%s\n' "$LEN"
