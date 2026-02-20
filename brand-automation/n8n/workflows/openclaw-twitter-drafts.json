@@ -1,0 +1,47 @@
+{
+  "name": "OpenClaw Twitter Drafts",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "openclaw-twitter-drafts",
+        "httpMethod": "POST",
+        "responseMode": "onReceived"
+      },
+      "id": "Webhook_Twitter",
+      "name": "Webhook Twitter Drafts",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [260, 240]
+    },
+    {
+      "parameters": {
+        "functionCode": "const body = $json.body ?? $json;\nreturn [{ json: { kind: body.kind, file: body.file, timestamp: body.timestamp, content: body.content } }];"
+      },
+      "id": "Normalize",
+      "name": "Normalize Payload",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [520, 240]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "fileName": "/data/openclaw/twitter-drafts-log.jsonl",
+        "dataPropertyName": "=JSON.stringify($json)"
+      },
+      "id": "Write_File",
+      "name": "Write JSONL",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [790, 240]
+    }
+  ],
+  "connections": {
+    "Webhook Twitter Drafts": {
+      "main": [[{ "node": "Normalize Payload", "type": "main", "index": 0 }]]
+    },
+    "Normalize Payload": {
+      "main": [[{ "node": "Write JSONL", "type": "main", "index": 0 }]]
+    }
+  }
+}

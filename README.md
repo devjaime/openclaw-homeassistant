@@ -6,6 +6,8 @@ Base de trabajo para version custom de OpenClaw + Home Assistant.
 - `openclaw/`: snapshot del codigo fuente de OpenClaw
 - `homeassistant-tools/`: scripts operativos (camara, HA API, Alexa)
 - `homeassistant-infra/`: docker compose para correr Home Assistant
+- `brand-automation/`: pipeline nocturno (trabajo + contenido Twitter/YouTube + n8n)
+- `obsidian-vault/`: vault Markdown versionado para ideas, backlog y bitácora
 
 ## Inicio rapido
 ```bash
