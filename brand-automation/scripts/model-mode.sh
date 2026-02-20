@@ -4,7 +4,7 @@ set -euo pipefail
 CONF="/Users/devjaime/.openclaw/openclaw.json"
 MODE="${1:-status}"
 
-OLLAMA_MODEL="custom-127-0-0-1-11434/qwen2.5vl:7b"
+OLLAMA_MODEL="custom-127-0-0-1-11434/qwen2.5:7b"
 GEMINI_MODEL="google/gemini-2.5-flash-lite"
 MINMAX_MODEL="minimax-portal/MiniMax-M2.5"
 
