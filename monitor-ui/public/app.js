@@ -75,6 +75,75 @@ function renderLogs(data) {
   setText('haLogs', (data.logs.homeassistant || []).join('\n') || 'Sin logs locales de Home Assistant');
 }
 
+function fmtNum(n) {
+  return Number(n || 0).toLocaleString('es-CL');
+}
+
+function fmtMoney(n, currency = 'USD') {
+  return new Intl.NumberFormat('es-CL', { style: 'currency', currency, maximumFractionDigits: currency === 'CLP' ? 0 : 4 }).format(Number(n || 0));
+}
+
+function renderUsage(data) {
+  const usage = data.usage || {};
+  const totals = usage.totals || {};
+  const summary = document.getElementById('usageSummary');
+  summary.innerHTML = [
+    { label: `Tokens (${usage.lookbackDays || 7}d)`, value: fmtNum(totals.total), className: 'ok' },
+    { label: 'Input', value: fmtNum(totals.input), className: 'ok' },
+    { label: 'USD estimado', value: fmtMoney(totals.costUsd, 'USD'), className: 'warn' },
+    { label: `CLP estimado (1 USD=${fmtNum(usage.usdClpRate || 0)})`, value: fmtMoney(totals.costClp, 'CLP'), className: 'warn' },
+  ].map((k) => `<div class=\"kpi\"><div class=\"label\">${k.label}</div><div class=\"value ${k.className}\">${k.value}</div></div>`).join('');
+
+  const tbody = document.getElementById('usageModels');
+  const rows = usage.models || [];
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan=\"5\">Sin datos de uso.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map((r) => `
+    <tr>
+      <td><code>${r.model}</code>${r.localEstimatedFree ? ' <span class=\"ok\">(local)</span>' : ''}</td>
+      <td>${fmtNum(r.usage.calls)}</td>
+      <td>${fmtNum(r.usage.total)}</td>
+      <td>${fmtMoney(r.costUsd, 'USD')}</td>
+      <td>${fmtMoney(r.costClp, 'CLP')}</td>
+    </tr>
+  `).join('');
+}
+
+function renderProjects(data) {
+  const projects = data.projects || {};
+  const totals = projects.totals || {};
+  const summary = document.getElementById('projectSummary');
+  summary.innerHTML = [
+    { label: 'Commits 24h', value: fmtNum(totals.commits24h), className: 'ok' },
+    { label: 'Commits 7d', value: fmtNum(totals.commits7d), className: 'ok' },
+    { label: 'Commits 30d', value: fmtNum(totals.commits30d), className: 'ok' },
+  ].map((k) => `<div class=\"kpi\"><div class=\"label\">${k.label}</div><div class=\"value ${k.className}\">${k.value}</div></div>`).join('');
+
+  const tbody = document.getElementById('projects');
+  const rows = projects.projects || [];
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan=\"5\">Sin repos detectados.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map((p) => {
+    if (!p.exists) {
+      return `<tr><td>${p.label}</td><td colspan=\"4\" class=\"warn\">No encontrado en path configurado</td></tr>`;
+    }
+    const last = p.lastCommit ? `${p.lastCommit.date?.slice(0, 16) || ''} · ${p.lastCommit.author || ''} · ${p.lastCommit.subject || ''}` : '-';
+    return `
+      <tr>
+        <td>${p.label}</td>
+        <td>${fmtNum(p.commits24h)}</td>
+        <td>${fmtNum(p.commits7d)}</td>
+        <td>${fmtNum(p.commits30d)}</td>
+        <td>${last}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
 async function load() {
   try {
     const res = await fetch('/api/status', { cache: 'no-store' });
@@ -83,6 +152,8 @@ async function load() {
     renderConnections(data);
     renderModel(data);
     renderJobs(data);
+    renderUsage(data);
+    renderProjects(data);
     renderLogs(data);
     setText('lastUpdate', `Última actualización: ${new Date().toLocaleString('es-CL')}`);
   } catch (e) {

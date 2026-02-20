@@ -47,6 +47,29 @@
     </section>
 
     <section class="card span2">
+      <h2>Tokens y Gasto Estimado</h2>
+      <div id="usageSummary" class="kpis"></div>
+      <table>
+        <thead>
+          <tr><th>Modelo</th><th>Calls</th><th>Tokens totales</th><th>USD (estimado)</th><th>CLP (estimado)</th></tr>
+        </thead>
+        <tbody id="usageModels"></tbody>
+      </table>
+      <p class="hint">Los costos son estimados y dependen de tarifas configuradas. Modelos locales se marcan como costo ~0.</p>
+    </section>
+
+    <section class="card span2">
+      <h2>Commits por Proyecto</h2>
+      <div id="projectSummary" class="kpis"></div>
+      <table>
+        <thead>
+          <tr><th>Proyecto</th><th>24h</th><th>7d</th><th>30d</th><th>Último commit</th></tr>
+        </thead>
+        <tbody id="projects"></tbody>
+      </table>
+    </section>
+
+    <section class="card span2">
       <h2>Eventos Telegram (últimos)</h2>
       <pre id="telegramEvents" class="log"></pre>
     </section>

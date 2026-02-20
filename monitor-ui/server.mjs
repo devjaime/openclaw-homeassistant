@@ -16,6 +16,30 @@ const OPENCLAW_CONFIG = process.env.OPENCLAW_CONFIG || path.join(process.env.HOM
 const OPENCLAW_LOG_DIR = '/tmp/openclaw';
 const HA_URL = process.env.HA_URL || 'http://127.0.0.1:8123';
 const GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL || 'ws://127.0.0.1:18789';
+const USD_CLP_RATE = Number(process.env.USD_CLP_RATE || 950);
+const USAGE_LOOKBACK_DAYS = Number(process.env.USAGE_LOOKBACK_DAYS || 7);
+const USAGE_MAX_FILES = Number(process.env.USAGE_MAX_FILES || 40);
+
+const MODEL_PRICE_PER_TOKEN_USD = {
+  'google/gemini-2.5-flash-lite': {
+    input: 0.1 / 1_000_000,
+    output: 0.4 / 1_000_000,
+    cacheRead: 0.025 / 1_000_000,
+    cacheWrite: 0.1 / 1_000_000,
+  },
+  'minimax-portal/MiniMax-M2.5': {
+    input: 0.6 / 1_000_000,
+    output: 2.4 / 1_000_000,
+    cacheRead: 0.15 / 1_000_000,
+    cacheWrite: 0.6 / 1_000_000,
+  },
+};
+
+const PROJECT_REPOS = [
+  { id: 'humanloop', label: 'humanloop.cl', path: '/Users/devjaime/.openclaw/workspace/humanloop' },
+  { id: 'vocari', label: 'vocari.cl (orienta-ai)', path: '/Users/devjaime/.openclaw/workspace/orienta-ai' },
+  { id: 'openclaw-ha', label: 'openclaw-homeassistant', path: '/Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant' },
+];
 
 const startedAt = Date.now();
 
@@ -39,6 +63,11 @@ function run(cmd) {
 
 function isErr(out) {
   return typeof out === 'string' && out.startsWith('__ERR__');
+}
+
+function n(v) {
+  const x = Number(v);
+  return Number.isFinite(x) ? x : 0;
 }
 
 function checkPort(host, port, timeoutMs = 1200) {
@@ -131,6 +160,183 @@ async function getCronJobs(cfg) {
   return { ok: true, jobs: compact };
 }
 
+async function listRecentJsonlFiles(root, maxFiles = 30) {
+  const out = [];
+  async function walk(dir, depth = 0) {
+    if (depth > 4) return;
+    let entries = [];
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        await walk(p, depth + 1);
+      } else if (e.isFile() && e.name.endsWith('.jsonl')) {
+        try {
+          const st = await fsp.stat(p);
+          out.push({ path: p, mtimeMs: st.mtimeMs });
+        } catch {}
+      }
+    }
+  }
+  await walk(root);
+  return out.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, maxFiles).map((x) => x.path);
+}
+
+async function readLastLines(file, maxLines = 1200) {
+  try {
+    const raw = await fsp.readFile(file, 'utf8');
+    const lines = raw.split('\n').filter(Boolean);
+    return lines.slice(-maxLines);
+  } catch {
+    return [];
+  }
+}
+
+function normalizeModelKey(provider, model) {
+  const p = String(provider || '').trim();
+  const m = String(model || '').trim();
+  if (!p && !m) return 'desconocido';
+  if (m.includes('/')) return m;
+  if (!p) return m;
+  return `${p}/${m}`;
+}
+
+function estimateCostUsd(modelKey, usage) {
+  const rate = MODEL_PRICE_PER_TOKEN_USD[modelKey];
+  if (!rate) return 0;
+  return (
+    n(usage.input) * n(rate.input) +
+    n(usage.output) * n(rate.output) +
+    n(usage.cacheRead) * n(rate.cacheRead) +
+    n(usage.cacheWrite) * n(rate.cacheWrite)
+  );
+}
+
+async function collectUsageStats() {
+  const now = Date.now();
+  const minTs = now - USAGE_LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
+  const usageByModel = new Map();
+
+  const sessionRoot = path.join(process.env.HOME || '', '.openclaw', 'agents', 'main', 'sessions');
+  const cronRoot = path.join(process.env.HOME || '', '.openclaw', 'cron', 'runs');
+  const files = [
+    ...(await listRecentJsonlFiles(sessionRoot, USAGE_MAX_FILES)),
+    ...(await listRecentJsonlFiles(cronRoot, USAGE_MAX_FILES)),
+  ];
+
+  for (const file of files) {
+    const lines = await readLastLines(file, 1500);
+    for (const line of lines) {
+      const row = safeJsonParse(line, null);
+      if (!row || typeof row !== 'object') continue;
+      const ts = n(row.timestamp ? Date.parse(row.timestamp) : row.ts);
+      if (ts && ts < minTs) continue;
+
+      const message = row.message && typeof row.message === 'object' ? row.message : null;
+      const usage =
+        (message && message.usage && typeof message.usage === 'object' ? message.usage : null) ||
+        (row.usage && typeof row.usage === 'object' ? row.usage : null);
+      if (!usage) continue;
+
+      const provider = (message && message.provider) || row.provider || '';
+      const model = (message && message.model) || row.model || '';
+      const key = normalizeModelKey(provider, model);
+      if (!usageByModel.has(key)) {
+        usageByModel.set(key, { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
+      }
+      const acc = usageByModel.get(key);
+      acc.calls += 1;
+      acc.input += n(usage.input || usage.input_tokens);
+      acc.output += n(usage.output || usage.output_tokens);
+      acc.cacheRead += n(usage.cacheRead || usage.cache_read_tokens);
+      acc.cacheWrite += n(usage.cacheWrite || usage.cache_write_tokens);
+      acc.total = acc.input + acc.output + acc.cacheRead + acc.cacheWrite;
+    }
+  }
+
+  const models = Array.from(usageByModel.entries()).map(([model, usage]) => {
+    const usd = estimateCostUsd(model, usage);
+    return {
+      model,
+      usage,
+      costUsd: usd,
+      costClp: usd * USD_CLP_RATE,
+      localEstimatedFree:
+        model.startsWith('custom-127-0-0-1-11434/') || model.includes('/qwen') || model.includes('/deepseek'),
+    };
+  });
+
+  const totals = models.reduce(
+    (acc, m) => {
+      acc.input += m.usage.input;
+      acc.output += m.usage.output;
+      acc.cacheRead += m.usage.cacheRead;
+      acc.cacheWrite += m.usage.cacheWrite;
+      acc.total += m.usage.total;
+      acc.costUsd += m.costUsd;
+      acc.costClp += m.costClp;
+      return acc;
+    },
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, costUsd: 0, costClp: 0 },
+  );
+
+  return {
+    lookbackDays: USAGE_LOOKBACK_DAYS,
+    usdClpRate: USD_CLP_RATE,
+    models: models.sort((a, b) => b.usage.total - a.usage.total),
+    totals,
+  };
+}
+
+function gitCount(repo, sinceExpr) {
+  const out = run(`git -C "${repo}" rev-list --count --since="${sinceExpr}" HEAD`);
+  if (isErr(out)) return null;
+  return Number(out) || 0;
+}
+
+function gitLastCommit(repo) {
+  const out = run(`git -C "${repo}" log -1 --date=iso --pretty=%cd|%an|%s`);
+  if (isErr(out) || !out) return null;
+  const [date, author, subject] = String(out).split('|');
+  return { date: date || '', author: author || '', subject: subject || '' };
+}
+
+async function collectProjectStats() {
+  const projects = [];
+  for (const p of PROJECT_REPOS) {
+    if (!fs.existsSync(path.join(p.path, '.git'))) {
+      projects.push({ ...p, exists: false });
+      continue;
+    }
+    const c24 = gitCount(p.path, '24 hours ago');
+    const c7 = gitCount(p.path, '7 days ago');
+    const c30 = gitCount(p.path, '30 days ago');
+    const last = gitLastCommit(p.path);
+    projects.push({
+      ...p,
+      exists: true,
+      commits24h: c24,
+      commits7d: c7,
+      commits30d: c30,
+      lastCommit: last,
+    });
+  }
+  const totals = projects.reduce(
+    (acc, p) => {
+      acc.commits24h += n(p.commits24h);
+      acc.commits7d += n(p.commits7d);
+      acc.commits30d += n(p.commits30d);
+      return acc;
+    },
+    { commits24h: 0, commits7d: 0, commits30d: 0 },
+  );
+  return { projects, totals };
+}
+
 function staticFile(res, relPath, contentType = 'text/plain; charset=utf-8') {
   const file = path.join(PUBLIC_DIR, relPath);
   if (!fs.existsSync(file)) {
@@ -169,6 +375,8 @@ async function buildStatus() {
   const openclawLogs = await getOpenClawLogTail(180);
   const haLogs = await getHomeAssistantLogTail(120);
   const cron = await getCronJobs(cfg);
+  const usageStats = await collectUsageStats();
+  const projectStats = await collectProjectStats();
 
   const errCount = openclawLogs.filter((l) => /\berror\b|failed|unauthorized|timeout/i.test(l)).length;
   const telegramEvents = openclawLogs.filter((l) => /telegram/i.test(l)).slice(-10);
@@ -211,6 +419,8 @@ async function buildStatus() {
       cronOk: Boolean(cron.ok),
       cronError: cron.error || null,
     },
+    usage: usageStats,
+    projects: projectStats,
     logs: {
       openclaw: openclawLogs.slice(-120),
       homeassistant: haLogs.slice(-120),
