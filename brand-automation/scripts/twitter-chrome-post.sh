@@ -156,14 +156,10 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   exit 0
 fi
 
-# Auto-post solo para Chrome; otros navegadores abren intent prellenado.
-if [[ "$BROWSER" != "chrome" ]]; then
-  open_intent "$FINAL_TEXT"
-  exit 0
-fi
-
 TEXT_JSON="$(printf '%s' "$FINAL_TEXT" | jq -Rs .)"
 set +e
+
+if [[ "$BROWSER" == "chrome" ]]; then
 OSA_OUT="$(osascript - "$TEXT_JSON" <<'OSA' 2>&1
 on run argv
 set textJson to item 1 of argv
@@ -198,12 +194,58 @@ return clickState
 end run
 OSA
 )"
+elif [[ "$BROWSER" == "safari" ]]; then
+OSA_OUT="$(osascript - "$TEXT_JSON" <<'OSA' 2>&1
+on run argv
+set textJson to item 1 of argv
+
+tell application "Safari"
+  activate
+  if (count of windows) = 0 then make new document
+  set URL of front document to "https://x.com/compose/post"
+end tell
+
+delay 3
+
+repeat 20 times
+  tell application "Safari"
+    tell front document
+      set readyState to do JavaScript "(function(){var t=document.querySelector('div[data-testid=\\\"tweetTextarea_0\\\"][role=\\\"textbox\\\"]'); return t ? 'ready' : 'wait';})()"
+    end tell
+  end tell
+  if readyState is "ready" then exit repeat
+  delay 0.5
+end repeat
+
+tell application "Safari"
+  tell front document
+    do JavaScript "(function(){var t=document.querySelector('div[data-testid=\\\"tweetTextarea_0\\\"][role=\\\"textbox\\\"]'); if(!t){return 'no_textarea'}; var v=" & textJson & "; t.focus(); t.innerText=v; t.dispatchEvent(new InputEvent('input',{bubbles:true})); return 'ok';})()"
+  end tell
+end tell
+
+delay 1.2
+
+tell application "Safari"
+  tell front document
+    set clickState to do JavaScript "(function(){var b=document.querySelector('button[data-testid=\\\"tweetButtonInline\\\"],button[data-testid=\\\"tweetButton\\\"]'); if(!b){return 'no_button'}; b.click(); return 'posted';})()"
+  end tell
+end tell
+
+return clickState
+end run
+OSA
+)"
+else
+  open_intent "$FINAL_TEXT"
+  exit 0
+fi
+
 OSA_CODE=$?
 set -e
 
 if [[ "$OSA_CODE" -ne 0 ]]; then
-  if printf '%s' "$OSA_OUT" | rg -qi "JavaScript.*AppleScript.*desactivada|AppleScript"; then
-    open_intent "$TEXT"
+  if printf '%s' "$OSA_OUT" | rg -qi "JavaScript.*AppleScript.*desactivada|AppleScript|Apple Events|Allow JavaScript from Apple Events"; then
+    open_intent "$FINAL_TEXT"
     exit 0
   fi
   echo "$OSA_OUT" >&2
