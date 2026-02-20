@@ -11,6 +11,14 @@ Si devuelve:
 - `ROUTED model-status ...` -> responder con ese estado al usuario.
 - `NOOP no-model-intent` -> continuar con reglas siguientes.
 
+0.1 Luego evalúa intención de publicación en X/Twitter:
+`/Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant/brand-automation/scripts/twitter-intent.sh "<mensaje_usuario>"`
+
+Si devuelve:
+- `ROUTED twitter-post ... mode=preview` -> responder con preview y pedir confirmación.
+- `ROUTED twitter-post ... mode=publish` -> responder `✅ Tweet publicado en X.`
+- `NOOP no-twitter-intent` -> continuar con reglas siguientes.
+
 1. Si el usuario escribe una frase con intención Alexa, ejecuta:
 `/Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant/homeassistant-tools/alexa-intent.sh "<mensaje_usuario>"`
 

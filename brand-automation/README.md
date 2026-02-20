@@ -61,6 +61,25 @@ Script:
 ./model-intent.sh "modelo actual"
 ```
 
+## Publicar en X/Twitter sin API (Chrome logueado)
+
+Usa tu sesión ya abierta en Chrome. El script publica solo con `--yes`.
+
+```bash
+./twitter-chrome-post.sh --draft 1          # preview
+./twitter-chrome-post.sh --draft 1 --yes    # publica
+./twitter-chrome-post.sh --text "Hola X"    # preview
+./twitter-chrome-post.sh --text "Hola X" --yes
+```
+
+Router para Telegram:
+
+```bash
+./twitter-intent.sh "publica draft 1"                 # preview
+./twitter-intent.sh "publica draft 1 confirmar"       # publica
+./twitter-intent.sh "tweet texto: avance en openclaw" # preview
+```
+
 ## Sincronizar en Obsidian
 
 ```bash
