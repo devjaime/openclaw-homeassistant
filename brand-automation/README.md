@@ -84,7 +84,12 @@ Router para Telegram:
 ./twitter-intent.sh "tweet texto: avance en openclaw" # preview
 ./twitter-intent.sh "publica texto: avance confirmar safari" # abre Safari prellenado
 ./twitter-intent.sh "publica texto: avance confirmar brave"  # abre Brave prellenado
+./twitter-intent.sh "ciclo proyecto humanloop"               # genera estado (preview)
+./twitter-intent.sh "ciclo proyecto humanloop confirmar safari" # genera y publica en Safari
 ```
+
+Nota:
+- En `twitter-intent.sh` el navegador por defecto ya es `safari`.
 
 ## Sincronizar en Obsidian
 

@@ -4,7 +4,8 @@ set -euo pipefail
 BASE="/Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant/brand-automation/scripts"
 MSG="${1:-}"
 LC_MSG="$(printf '%s' "$MSG" | tr '[:upper:]' '[:lower:]')"
-BROWSER="chrome"
+BROWSER="safari"
+PROJECT_STATUS_SCRIPT="/Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant/brand-automation/scripts/project-status-tweet.sh"
 
 if [[ "$LC_MSG" == *"safari"* ]]; then
   BROWSER="safari"
@@ -27,6 +28,22 @@ run_and_route() {
     echo "ROUTED twitter-post mode=unconfirmed browser=$BROWSER"
   else
     echo "$out"
+  fi
+}
+
+run_project_cycle() {
+  local project="$1"
+  local confirm="$2"
+  local tweet_text
+  tweet_text="$($PROJECT_STATUS_SCRIPT "$project")"
+
+  if [[ "$confirm" == "yes" ]]; then
+    OUT="$($BASE/twitter-chrome-post.sh --text "$tweet_text" --yes --browser "$BROWSER" --publisher telegram --trigger gatillado)"
+    run_and_route "$OUT"
+  else
+    OUT="$($BASE/twitter-chrome-post.sh --text "$tweet_text" --publisher telegram --trigger gatillado)"
+    echo "$OUT"
+    echo "ROUTED twitter-cycle project=$project mode=preview browser=$BROWSER"
   fi
 }
 
@@ -53,6 +70,20 @@ if [[ "$LC_MSG" =~ ^(publica|tweet|x)[[:space:]]+texto:[[:space:]]+(.+)$ ]]; the
     OUT="$($BASE/twitter-chrome-post.sh --text "$TXT" --publisher telegram --trigger gatillado)"
     echo "$OUT"
     echo "ROUTED twitter-post mode=preview browser=$BROWSER"
+  fi
+  exit 0
+fi
+
+# Ciclo de proyecto desde Telegram:
+# - ciclo proyecto humanloop
+# - ciclo proyecto humanloop confirmar safari
+if [[ "$LC_MSG" =~ ^(ciclo|estado)[[:space:]]+(proyecto[[:space:]]+)?([a-z0-9._-]+)(.*)$ ]]; then
+  PROJECT_KEY="${BASH_REMATCH[3]}"
+  TAIL="${BASH_REMATCH[4]}"
+  if [[ "$TAIL" == *"confirmar"* || "$TAIL" == *"publica ahora"* ]]; then
+    run_project_cycle "$PROJECT_KEY" "yes"
+  else
+    run_project_cycle "$PROJECT_KEY" "no"
   fi
   exit 0
 fi
