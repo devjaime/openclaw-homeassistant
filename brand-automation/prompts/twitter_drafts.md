@@ -3,9 +3,9 @@ Crear borradores de Twitter/X sobre progreso técnico y marca personal, basados 
 
 Entradas:
 - Commits/cambios de últimas 24h en:
-  - /Users/devjaime/.openclaw/workspace/humanloop
-  - /Users/devjaime/.openclaw/workspace/orienta-ai
-  - /Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant
+  - /workspace/humanloop
+  - /workspace/orienta-ai
+  - /workspace/projects/openclaw-homeassistant
 
 Reglas:
 1. Español claro.
@@ -19,7 +19,7 @@ Reglas:
 
 Entrega:
 1. Guardar en:
-   /Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant/brand-automation/drafts/twitter-<fecha>.md
+   /workspace/projects/openclaw-homeassistant/brand-automation/drafts/twitter-<fecha>.md
 2. Formato:
    - Draft 1: ...
    - Draft 2: ...

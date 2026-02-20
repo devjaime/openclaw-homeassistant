@@ -2,9 +2,9 @@ Objetivo:
 Trabajar como asistente técnico autónomo en bloques nocturnos sobre los proyectos activos, dejando evidencia real y trazable.
 
 Proyectos prioritarios:
-- /Users/devjaime/.openclaw/workspace/humanloop
-- /Users/devjaime/.openclaw/workspace/orienta-ai
-- /Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant
+- /workspace/humanloop
+- /workspace/orienta-ai
+- /workspace/projects/openclaw-homeassistant
 
 Reglas:
 1. Solo reportar progreso real (archivos, scripts, docs, tests, issues).
@@ -22,7 +22,7 @@ Flujo del bloque:
    - archivos tocados
    - siguientes pasos
 5. Guardar reporte en:
-   /Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant/brand-automation/reports/night-<fecha>-<hora>.md
+   /workspace/projects/openclaw-homeassistant/brand-automation/reports/night-<fecha>-<hora>.md
 
 Salida esperada:
 - Trabajo real aplicado en código/docs.

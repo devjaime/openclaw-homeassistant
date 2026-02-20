@@ -13,4 +13,4 @@ Reglas:
 
 Entrega:
 Guardar en:
-/Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant/brand-automation/drafts/youtube-backlog-<fecha>.md
+/workspace/projects/openclaw-homeassistant/brand-automation/drafts/youtube-backlog-<fecha>.md

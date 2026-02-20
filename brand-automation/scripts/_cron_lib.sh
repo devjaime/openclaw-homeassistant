@@ -2,7 +2,6 @@
 set -euo pipefail
 
 CONF="/Users/devjaime/.openclaw/openclaw.json"
-GATEWAY_URL="ws://127.0.0.1:18789"
 TZ_NAME="America/Santiago"
 TELEGRAM_ID="1540433103"
 
@@ -16,6 +15,28 @@ if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
   echo "No se encontró gateway.auth.token" >&2
   exit 1
 fi
+
+GATEWAY_PORT="$(jq -r '.gateway.port // 18789' "$CONF")"
+GATEWAY_URL="ws://127.0.0.1:${GATEWAY_PORT}"
+
+resolve_gateway_url() {
+  local token="$1"
+  local candidate
+  for candidate in \
+    "ws://127.0.0.1:${GATEWAY_PORT}" \
+    "ws://127.0.0.1:18789" \
+    "ws://127.0.0.1:18889"
+  do
+    if openclaw cron status --url "$candidate" --token "$token" >/dev/null 2>&1; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  echo "No fue posible conectar al gateway en 18789/18889 ni en puerto configurado (${GATEWAY_PORT})." >&2
+  exit 1
+}
+
+GATEWAY_URL="$(resolve_gateway_url "$TOKEN")"
 
 cron_list_json() {
   openclaw cron list --url "$GATEWAY_URL" --token "$TOKEN" --json

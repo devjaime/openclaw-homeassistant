@@ -17,15 +17,15 @@ cron_add_agent_job "night-work-0630" "30 6 * * *" "Bloque trabajo nocturno 06:30
 # Cambio de modelo por horario:
 # 22:00 -> Ollama (gratis/local), 08:30 -> Gemini
 cat > /tmp/openclaw_model_night_prompt.txt <<'PROMPT'
-Ejecuta este comando exactamente y reporta el resultado:
-/Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant/brand-automation/scripts/model-mode.sh night
+Ejecuta exactamente este comando y reporta SOLO el resultado:
+/bin/bash -lc 'if [ -x /workspace/projects/openclaw-homeassistant/brand-automation/scripts/model-mode.sh ]; then /workspace/projects/openclaw-homeassistant/brand-automation/scripts/model-mode.sh night; elif [ -x /Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant/brand-automation/scripts/model-mode.sh ]; then /Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant/brand-automation/scripts/model-mode.sh night; else echo "ERROR: model-mode.sh not found"; exit 1; fi'
 PROMPT
 cron_add_agent_job "model-night-2200" "0 22 * * *" "Switch modelo a Ollama por horario nocturno" "/tmp/openclaw_model_night_prompt.txt"
 rm -f /tmp/openclaw_model_night_prompt.txt
 
 cat > /tmp/openclaw_model_day_prompt.txt <<'PROMPT'
-Ejecuta este comando exactamente y reporta el resultado:
-/Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant/brand-automation/scripts/model-mode.sh day
+Ejecuta exactamente este comando y reporta SOLO el resultado:
+/bin/bash -lc 'if [ -x /workspace/projects/openclaw-homeassistant/brand-automation/scripts/model-mode.sh ]; then /workspace/projects/openclaw-homeassistant/brand-automation/scripts/model-mode.sh day; elif [ -x /Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant/brand-automation/scripts/model-mode.sh ]; then /Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant/brand-automation/scripts/model-mode.sh day; else echo "ERROR: model-mode.sh not found"; exit 1; fi'
 PROMPT
 cron_add_agent_job "model-day-0830" "30 8 * * *" "Switch modelo a Gemini por horario diurno" "/tmp/openclaw_model_day_prompt.txt"
 rm -f /tmp/openclaw_model_day_prompt.txt
