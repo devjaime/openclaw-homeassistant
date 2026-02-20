@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Panel OpenClaw + Home Assistant</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>Panel de Monitoreo</h1>
+      <p>OpenClaw + Home Assistant en tiempo real</p>
+    </div>
+    <div class="actions">
+      <button id="refreshBtn">Actualizar</button>
+      <a id="openDashboard" target="_blank" rel="noreferrer">Abrir Dashboard OpenClaw</a>
+      <a href="http://127.0.0.1:8123" target="_blank" rel="noreferrer">Abrir Home Assistant</a>
+    </div>
+  </header>
+
+  <main class="grid">
+    <section class="card">
+      <h2>Estado General</h2>
+      <div id="summary" class="kpis"></div>
+    </section>
+
+    <section class="card">
+      <h2>Conexiones</h2>
+      <ul id="connections" class="list"></ul>
+    </section>
+
+    <section class="card span2">
+      <h2>Modelo y Ejecución</h2>
+      <div id="modelInfo"></div>
+      <p class="hint">Regla recomendada: noche Ollama, día Gemini, fallback automático a Gemini si falla modelo local.</p>
+    </section>
+
+    <section class="card span2">
+      <h2>Jobs / Horarios</h2>
+      <table>
+        <thead>
+          <tr><th>Nombre</th><th>Cron</th><th>TZ</th><th>Próxima ejecución</th><th>Activo</th></tr>
+        </thead>
+        <tbody id="jobs"></tbody>
+      </table>
+    </section>
+
+    <section class="card span2">
+      <h2>Eventos Telegram (últimos)</h2>
+      <pre id="telegramEvents" class="log"></pre>
+    </section>
+
+    <section class="card span2">
+      <h2>Logs OpenClaw</h2>
+      <pre id="openclawLogs" class="log"></pre>
+    </section>
+
+    <section class="card span2">
+      <h2>Logs Home Assistant</h2>
+      <pre id="haLogs" class="log"></pre>
+    </section>
+  </main>
+
+  <footer>
+    <span id="lastUpdate">Sin datos</span>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>
