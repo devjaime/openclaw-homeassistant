@@ -220,6 +220,8 @@ async function collectUsageStats() {
   const now = Date.now();
   const minTs = now - USAGE_LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
   const usageByModel = new Map();
+  // daily[YYYY-MM-DD][modelKey] = { calls, input, output, cacheRead, cacheWrite, total }
+  const daily = {};
 
   const sessionRoot = path.join(process.env.HOME || '', '.openclaw', 'agents', 'main', 'sessions');
   const cronRoot = path.join(process.env.HOME || '', '.openclaw', 'cron', 'runs');
@@ -245,6 +247,8 @@ async function collectUsageStats() {
       const provider = (message && message.provider) || row.provider || '';
       const model = (message && message.model) || row.model || '';
       const key = normalizeModelKey(provider, model);
+
+      // aggregate totals
       if (!usageByModel.has(key)) {
         usageByModel.set(key, { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
       }
@@ -255,6 +259,17 @@ async function collectUsageStats() {
       acc.cacheRead += n(usage.cacheRead || usage.cache_read_tokens);
       acc.cacheWrite += n(usage.cacheWrite || usage.cache_write_tokens);
       acc.total = acc.input + acc.output + acc.cacheRead + acc.cacheWrite;
+
+      // daily breakdown
+      const day = ts
+        ? new Date(ts).toISOString().slice(0, 10)
+        : new Date().toISOString().slice(0, 10);
+      if (!daily[day]) daily[day] = {};
+      if (!daily[day][key]) daily[day][key] = { calls: 0, input: 0, output: 0, total: 0 };
+      daily[day][key].calls += 1;
+      daily[day][key].input += n(usage.input || usage.input_tokens);
+      daily[day][key].output += n(usage.output || usage.output_tokens);
+      daily[day][key].total = daily[day][key].input + daily[day][key].output;
     }
   }
 
@@ -289,6 +304,7 @@ async function collectUsageStats() {
     usdClpRate: USD_CLP_RATE,
     models: models.sort((a, b) => b.usage.total - a.usage.total),
     totals,
+    daily,
   };
 }
 

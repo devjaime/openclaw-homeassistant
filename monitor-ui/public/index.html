@@ -4,60 +4,180 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Panel OpenClaw + Home Assistant</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --bg2: #1a1d27;
+      --bg3: #222536;
+      --border: #2e3248;
+      --text: #e2e8f0;
+      --text2: #94a3b8;
+      --green: #22c55e;
+      --red: #ef4444;
+      --yellow: #f59e0b;
+      --blue: #3b82f6;
+      --purple: #a78bfa;
+      --cyan: #06b6d4;
+      --orange: #f97316;
+      --font: 'SF Mono', 'Fira Code', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; font-size: 14px; }
+
+    /* HEADER */
+    .top { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; background: var(--bg2); border-bottom: 1px solid var(--border); gap: 12px; flex-wrap: wrap; }
+    .top h1 { font-size: 18px; font-weight: 700; }
+    .top p { font-size: 12px; color: var(--text2); margin-top: 2px; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .actions button, .actions a {
+      padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;
+      text-decoration: none; display: inline-block;
+    }
+    .actions button { background: var(--blue); color: #fff; border: none; }
+    .actions a { background: var(--bg3); color: var(--text); border: 1px solid var(--border); }
+    .actions button:hover { opacity: 0.85; }
+    .pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; margin-right: 6px; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+    /* GRID */
+    main { padding: 16px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+    .card { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+    .card h2 { font-size: 13px; font-weight: 700; color: var(--text2); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 12px; }
+    .span2 { grid-column: span 2; }
+    .span4 { grid-column: span 4; }
+    @media(max-width: 900px) { main { grid-template-columns: 1fr 1fr; } .span4 { grid-column: span 2; } }
+    @media(max-width: 560px) { main { grid-template-columns: 1fr; } .span2,.span4 { grid-column: span 1; } }
+
+    /* KPIS */
+    .kpis { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+    .kpi { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; min-width: 110px; }
+    .kpi .label { font-size: 11px; color: var(--text2); margin-bottom: 4px; }
+    .kpi .value { font-size: 18px; font-weight: 700; }
+    .ok { color: var(--green); }
+    .bad { color: var(--red); }
+    .warn { color: var(--yellow); }
+    .info { color: var(--blue); }
+
+    /* TABLE */
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; padding: 6px 8px; color: var(--text2); font-weight: 600; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; }
+    td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+    tr:last-child td { border-bottom: none; }
+    code { font-family: var(--font); font-size: 12px; background: var(--bg3); padding: 1px 5px; border-radius: 4px; }
+
+    /* LOGS */
+    .log-container { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; height: 260px; overflow-y: auto; font-family: var(--font); font-size: 12px; }
+    .log-line { display: flex; gap: 8px; padding: 3px 10px; border-bottom: 1px solid rgba(255,255,255,.03); align-items: flex-start; }
+    .log-line:hover { background: rgba(255,255,255,.03); }
+    .log-ts { color: var(--text2); white-space: nowrap; flex-shrink: 0; font-size: 11px; }
+    .log-level { font-weight: 700; white-space: nowrap; flex-shrink: 0; min-width: 50px; font-size: 11px; }
+    .log-msg { color: var(--text); word-break: break-all; }
+    .level-error { color: var(--red); }
+    .level-warn  { color: var(--yellow); }
+    .level-info  { color: var(--blue); }
+    .level-debug { color: var(--text2); }
+    .level-ok    { color: var(--green); }
+
+    /* TELEGRAM CARDS */
+    .tg-list { display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto; }
+    .tg-card { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; display: flex; gap: 10px; align-items: flex-start; }
+    .tg-badge { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 20px; white-space: nowrap; flex-shrink: 0; margin-top: 2px; }
+    .tg-badge.in  { background: rgba(59,130,246,.25); color: var(--blue); }
+    .tg-badge.out { background: rgba(34,197,94,.25); color: var(--green); }
+    .tg-badge.err { background: rgba(239,68,68,.25); color: var(--red); }
+    .tg-body { flex: 1; }
+    .tg-ts { font-size: 10px; color: var(--text2); }
+    .tg-text { font-size: 12px; margin-top: 2px; word-break: break-word; }
+
+    /* CHART */
+    .chart-wrap { position: relative; height: 220px; }
+
+    /* LIST */
+    .list { list-style: none; display: flex; flex-direction: column; gap: 4px; }
+    .list li { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 4px 0; border-bottom: 1px solid var(--border); }
+    .list li:last-child { border-bottom: none; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .dot.green { background: var(--green); }
+    .dot.red   { background: var(--red); }
+    .dot.yellow{ background: var(--yellow); }
+
+    /* FOOTER */
+    footer { text-align: center; padding: 12px; font-size: 11px; color: var(--text2); border-top: 1px solid var(--border); }
+
+    /* TABS */
+    .tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+    .tab { padding: 4px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid var(--border); background: var(--bg3); color: var(--text2); }
+    .tab.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    .hint { font-size: 11px; color: var(--text2); margin-top: 8px; }
+    .model-badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 700; }
+    .model-local  { background: rgba(167,139,250,.2); color: var(--purple); }
+    .model-gemini { background: rgba(6,182,212,.2);  color: var(--cyan); }
+    .model-minmax { background: rgba(249,115,22,.2); color: var(--orange); }
+    .model-other  { background: rgba(148,163,184,.2);color: var(--text2); }
+  </style>
 </head>
 <body>
   <header class="top">
     <div>
-      <h1>Panel de Monitoreo</h1>
-      <p>OpenClaw + Home Assistant en tiempo real</p>
+      <h1><span class="pulse"></span>Panel de Monitoreo</h1>
+      <p>OpenClaw + Home Assistant · actualización cada 30s</p>
     </div>
     <div class="actions">
-      <button id="refreshBtn">Actualizar</button>
-      <a id="openDashboard" target="_blank" rel="noreferrer">Abrir Dashboard OpenClaw</a>
-      <a href="http://127.0.0.1:8123" target="_blank" rel="noreferrer">Abrir Home Assistant</a>
+      <button id="refreshBtn">↻ Actualizar</button>
+      <a id="openDashboard" target="_blank" rel="noreferrer">Dashboard OpenClaw</a>
+      <a href="http://127.0.0.1:8123" target="_blank" rel="noreferrer">Home Assistant</a>
+      <a href="http://127.0.0.1:5678" target="_blank" rel="noreferrer">n8n</a>
     </div>
   </header>
 
   <main class="grid">
-    <section class="card">
-      <h2>Estado General</h2>
+    <!-- KPIs -->
+    <section class="card span4">
       <div id="summary" class="kpis"></div>
     </section>
 
-    <section class="card">
+    <!-- Conexiones -->
+    <section class="card span2">
       <h2>Conexiones</h2>
       <ul id="connections" class="list"></ul>
     </section>
 
+    <!-- Modelo -->
     <section class="card span2">
-      <h2>Modelo y Ejecución</h2>
+      <h2>Modelo y Modo</h2>
       <div id="modelInfo"></div>
-      <p class="hint">Regla recomendada: noche Ollama, día Gemini, fallback automático a Gemini si falla modelo local.</p>
     </section>
 
+    <!-- Gráfico diario tokens -->
     <section class="card span2">
-      <h2>Jobs / Horarios</h2>
-      <table>
-        <thead>
-          <tr><th>Nombre</th><th>Cron</th><th>TZ</th><th>Próxima ejecución</th><th>Activo</th></tr>
-        </thead>
-        <tbody id="jobs"></tbody>
-      </table>
+      <h2>Tokens por día (últimos 7 días)</h2>
+      <div class="chart-wrap"><canvas id="chartDaily"></canvas></div>
     </section>
 
+    <!-- Gráfico por modelo -->
     <section class="card span2">
+      <h2>Distribución por modelo</h2>
+      <div class="chart-wrap"><canvas id="chartModels"></canvas></div>
+    </section>
+
+    <!-- Tokens tabla -->
+    <section class="card span4">
       <h2>Tokens y Gasto Estimado</h2>
       <div id="usageSummary" class="kpis"></div>
       <table>
         <thead>
-          <tr><th>Modelo</th><th>Calls</th><th>Tokens totales</th><th>USD (estimado)</th><th>CLP (estimado)</th></tr>
+          <tr><th>Modelo</th><th>Calls</th><th>Input</th><th>Output</th><th>Total tokens</th><th>USD (est.)</th><th>CLP (est.)</th></tr>
         </thead>
         <tbody id="usageModels"></tbody>
       </table>
-      <p class="hint">Los costos son estimados y dependen de tarifas configuradas. Modelos locales se marcan como costo ~0.</p>
+      <p class="hint">⚠️ Los costos son estimados. Modelos locales (Ollama) tienen costo real $0.</p>
     </section>
 
+    <!-- Commits -->
     <section class="card span2">
       <h2>Commits por Proyecto</h2>
       <div id="projectSummary" class="kpis"></div>
@@ -69,24 +189,41 @@
       </table>
     </section>
 
+    <!-- Jobs -->
     <section class="card span2">
-      <h2>Eventos Telegram (últimos)</h2>
-      <pre id="telegramEvents" class="log"></pre>
+      <h2>Jobs / Horarios cron</h2>
+      <table>
+        <thead>
+          <tr><th>Nombre</th><th>Expresión</th><th>Próxima ejecución</th><th>Activo</th></tr>
+        </thead>
+        <tbody id="jobs"></tbody>
+      </table>
     </section>
 
+    <!-- Telegram -->
     <section class="card span2">
-      <h2>Logs OpenClaw</h2>
-      <pre id="openclawLogs" class="log"></pre>
+      <h2>Eventos Telegram</h2>
+      <div id="telegramList" class="tg-list"></div>
     </section>
 
+    <!-- Logs con tabs -->
     <section class="card span2">
-      <h2>Logs Home Assistant</h2>
-      <pre id="haLogs" class="log"></pre>
+      <h2>Logs</h2>
+      <div class="tabs">
+        <div class="tab active" data-tab="openclaw">OpenClaw</div>
+        <div class="tab" data-tab="ha">Home Assistant</div>
+      </div>
+      <div id="tab-openclaw" class="tab-panel active">
+        <div id="openclawLogs" class="log-container"></div>
+      </div>
+      <div id="tab-ha" class="tab-panel">
+        <div id="haLogs" class="log-container"></div>
+      </div>
     </section>
   </main>
 
   <footer>
-    <span id="lastUpdate">Sin datos</span>
+    <span id="lastUpdate">Cargando...</span>
   </footer>
 
   <script src="/app.js"></script>
