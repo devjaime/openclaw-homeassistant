@@ -17,6 +17,12 @@ if [[ "$TXT" =~ ^(modo|usar|cambiar[[:space:]]+a)[[:space:]]+gemini$ ]] || [[ "$
   exit 0
 fi
 
+if [[ "$TXT" =~ ^(modo|usar|cambiar[[:space:]]+a)[[:space:]]+(minmax|minimax|potente|power)$ ]] || [[ "$TXT" =~ ^(minmax|minimax)$ ]]; then
+  "$MODE_SH" minmax >/dev/null
+  echo "ROUTED model-minmax"
+  exit 0
+fi
+
 if [[ "$TXT" =~ ^(modo|usar|cambiar[[:space:]]+a)[[:space:]]+(ollama|local|noche)$ ]] || [[ "$TXT" =~ ^(ollama|local)$ ]]; then
   "$MODE_SH" night >/dev/null
   echo "ROUTED model-night"

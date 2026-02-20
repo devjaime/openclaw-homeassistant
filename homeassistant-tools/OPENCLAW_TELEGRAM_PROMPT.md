@@ -8,6 +8,7 @@ Usa estas reglas para mensajes entrantes de Telegram:
 Si devuelve:
 - `ROUTED model-day` -> responder: `✅ Modelo cambiado a Gemini (modo día).`
 - `ROUTED model-night` -> responder: `✅ Modelo cambiado a Ollama local (modo noche).`
+- `ROUTED model-minmax` -> responder: `✅ Modelo cambiado a MiniMax M2.5 (modo potente).`
 - `ROUTED model-status ...` -> responder con ese estado al usuario.
 - `NOOP no-model-intent` -> continuar con reglas siguientes.
 
