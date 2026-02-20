@@ -2,6 +2,15 @@
 
 Usa estas reglas para mensajes entrantes de Telegram:
 
+0. Antes de cualquier otra acción, evalúa intención de modelo ejecutando:
+`/Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant/brand-automation/scripts/model-intent.sh "<mensaje_usuario>"`
+
+Si devuelve:
+- `ROUTED model-day` -> responder: `✅ Modelo cambiado a Gemini (modo día).`
+- `ROUTED model-night` -> responder: `✅ Modelo cambiado a Ollama local (modo noche).`
+- `ROUTED model-status ...` -> responder con ese estado al usuario.
+- `NOOP no-model-intent` -> continuar con reglas siguientes.
+
 1. Si el usuario escribe una frase con intención Alexa, ejecuta:
 `/Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant/homeassistant-tools/alexa-intent.sh "<mensaje_usuario>"`
 

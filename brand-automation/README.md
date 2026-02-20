@@ -5,6 +5,9 @@ Pipeline nocturno para que el bot avance en proyectos y deje contenido de marca 
 ## Qué incluye
 
 - Bloques de trabajo nocturno (03:30, 05:00, 06:30)
+- Cambio automático de modelo:
+  - 22:00 -> Ollama local (`qwen2.5:7b`)
+  - 08:30 -> Gemini (`gemini-2.5-flash-lite`)
 - Generación de borradores Twitter (07:45)
 - Backlog YouTube + shorts (08:10)
 - Resumen final de jornada (08:25)
@@ -38,6 +41,24 @@ cd /Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant/brand-aut
 
 ```bash
 ./run-now.sh
+```
+
+## Cambiar modelo manualmente
+
+```bash
+./model-mode.sh status
+./model-mode.sh night   # Ollama
+./model-mode.sh day     # Gemini
+```
+
+## Control por texto (intención Telegram)
+
+Script:
+
+```bash
+./model-intent.sh "modo gemini"
+./model-intent.sh "modo ollama"
+./model-intent.sh "modelo actual"
 ```
 
 ## Sincronizar en Obsidian

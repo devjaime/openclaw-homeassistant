@@ -9,6 +9,8 @@ for name in \
   night-work-0330 \
   night-work-0500 \
   night-work-0630 \
+  model-night-2200 \
+  model-day-0830 \
   brand-twitter-drafts-0745 \
   brand-youtube-backlog-0810 \
   night-final-report-0825
