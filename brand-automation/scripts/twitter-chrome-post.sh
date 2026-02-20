@@ -181,17 +181,17 @@ repeat 20 times
 end repeat
 
 tell application "Google Chrome"
-  execute active tab of front window javascript "(function(){var t=document.querySelector('div[data-testid=\\\"tweetTextarea_0\\\"][role=\\\"textbox\\\"]'); if(!t){return 'no_textarea'}; var v=" & textJson & "; t.focus(); t.innerText=v; t.dispatchEvent(new InputEvent('input',{bubbles:true})); return 'ok';})()"
+  set fillState to execute active tab of front window javascript "(function(){var t=document.querySelector('div[data-testid=\\\"tweetTextarea_0\\\"][role=\\\"textbox\\\"]'); if(!t){return 'no_textarea'}; var v=" & textJson & "; t.focus(); try{document.execCommand('selectAll', false, null);}catch(e){}; try{document.execCommand('insertText', false, v);}catch(e){}; if((t.innerText||'').trim()!==String(v).trim()){t.textContent=v;} ['keydown','keypress','beforeinput','input','keyup','change'].forEach(function(ev){try{t.dispatchEvent(new Event(ev,{bubbles:true}))}catch(e){}}); var b=document.querySelector('button[data-testid=\\\"tweetButtonInline\\\"],button[data-testid=\\\"tweetButton\\\"]'); if(!b){return 'no_button'}; return b.disabled?'button_disabled':'ok';})()"
 end tell
 
 delay 1.2
 
 tell application "Google Chrome"
-  set clickState to execute active tab of front window javascript "(function(){var b=document.querySelector('button[data-testid=\\\"tweetButtonInline\\\"],button[data-testid=\\\"tweetButton\\\"]'); if(!b){return 'no_button'}; b.click(); return 'posted';})()"
+  set clickState to execute active tab of front window javascript "(function(){var b=document.querySelector('button[data-testid=\\\"tweetButtonInline\\\"],button[data-testid=\\\"tweetButton\\\"]'); if(!b){return 'no_button'}; if(b.disabled){return 'button_disabled'}; b.click(); return 'posted';})()"
 end tell
 
 if clickState is not "posted" then
-  return "click_failed:" & clickState
+  return "click_failed:" & clickState & ";fill_state:" & fillState
 end if
 
 set postState to "pending"
@@ -232,7 +232,7 @@ end repeat
 
 tell application "Safari"
   tell front document
-    do JavaScript "(function(){var t=document.querySelector('div[data-testid=\\\"tweetTextarea_0\\\"][role=\\\"textbox\\\"]'); if(!t){return 'no_textarea'}; var v=" & textJson & "; t.focus(); t.innerText=v; t.dispatchEvent(new InputEvent('input',{bubbles:true})); return 'ok';})()"
+    set fillState to do JavaScript "(function(){var t=document.querySelector('div[data-testid=\\\"tweetTextarea_0\\\"][role=\\\"textbox\\\"]'); if(!t){return 'no_textarea'}; var v=" & textJson & "; t.focus(); try{document.execCommand('selectAll', false, null);}catch(e){}; try{document.execCommand('insertText', false, v);}catch(e){}; if((t.innerText||'').trim()!==String(v).trim()){t.textContent=v;} ['keydown','keypress','beforeinput','input','keyup','change'].forEach(function(ev){try{t.dispatchEvent(new Event(ev,{bubbles:true}))}catch(e){}}); var b=document.querySelector('button[data-testid=\\\"tweetButtonInline\\\"],button[data-testid=\\\"tweetButton\\\"]'); if(!b){return 'no_button'}; return b.disabled?'button_disabled':'ok';})()"
   end tell
 end tell
 
@@ -240,12 +240,12 @@ delay 1.2
 
 tell application "Safari"
   tell front document
-    set clickState to do JavaScript "(function(){var b=document.querySelector('button[data-testid=\\\"tweetButtonInline\\\"],button[data-testid=\\\"tweetButton\\\"]'); if(!b){return 'no_button'}; b.click(); return 'posted';})()"
+    set clickState to do JavaScript "(function(){var b=document.querySelector('button[data-testid=\\\"tweetButtonInline\\\"],button[data-testid=\\\"tweetButton\\\"]'); if(!b){return 'no_button'}; if(b.disabled){return 'button_disabled'}; b.click(); return 'posted';})()"
   end tell
 end tell
 
 if clickState is not "posted" then
-  return "click_failed:" & clickState
+  return "click_failed:" & clickState & ";fill_state:" & fillState
 end if
 
 set postState to "pending"
