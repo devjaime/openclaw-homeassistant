@@ -42,3 +42,13 @@ cd homeassistant-infra
 ```
 
 Cuando aparezcan `notify.alexa_*` o `media_player.echo_*`, ya queda operativo el envio de voz.
+
+## OpenClaw Telegram -> Alexa (intención por texto)
+
+Script de enrutamiento:
+```bash
+./homeassistant-tools/alexa-intent.sh "avisa por alexa: Jaime está almorzando"
+```
+
+Prompt base recomendado para OpenClaw:
+- `homeassistant-tools/OPENCLAW_TELEGRAM_PROMPT.md`

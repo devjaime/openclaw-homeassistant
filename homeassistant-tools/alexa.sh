@@ -38,6 +38,24 @@ api() {
   fi
 }
 
+validate_service_response() {
+  local response="$1"
+  if [[ "$response" == 500* ]] || [[ "$response" == *"Internal Server Error"* ]]; then
+    echo "Service call failed: ${response}" >&2
+    return 1
+  fi
+
+  if echo "$response" | jq -e 'type=="object" and has("message")' >/dev/null 2>&1; then
+    local msg
+    msg="$(echo "$response" | jq -r '.message // empty')"
+    if [[ -n "$msg" ]]; then
+      echo "Service call failed: ${msg}" >&2
+      return 1
+    fi
+  fi
+  return 0
+}
+
 require_up() {
   curl -sS -m 4 "${HA_URL}/api/" \
     -H "Authorization: Bearer ${HA_TOKEN}" >/dev/null
@@ -51,6 +69,39 @@ discover_alexa_notify_services() {
   api GET "/api/services" \
     | jq -r '.[] | select(.domain=="notify") | .services | keys[]' \
     | rg -i 'alexa|echo|media' || true
+}
+
+pick_preferred_alexa_notify_service() {
+  local services
+  services="$(discover_alexa_notify_services || true)"
+  if [[ -z "$services" ]]; then
+    return 1
+  fi
+
+  # Best: explicit device-scoped services (e.g. alexa_media_echo_dot_de_jaime)
+  local preferred
+  preferred="$(printf '%s\n' "$services" | rg '^alexa_media_' | rg -v '^(alexa_media|alexa_media_last_called|alexa_media_this_device)$' | head -n 1 || true)"
+  if [[ -n "$preferred" ]]; then
+    printf '%s' "$preferred"
+    return 0
+  fi
+
+  # Next: this_device / last_called (when explicit device alias isn't available)
+  preferred="$(printf '%s\n' "$services" | rg '^(alexa_media_this_device|alexa_media_last_called)$' | head -n 1 || true)"
+  if [[ -n "$preferred" ]]; then
+    printf '%s' "$preferred"
+    return 0
+  fi
+
+  # Last: generic alexa_media
+  preferred="$(printf '%s\n' "$services" | rg '^alexa_media$' | head -n 1 || true)"
+  if [[ -n "$preferred" ]]; then
+    printf '%s' "$preferred"
+    return 0
+  fi
+
+  # Any remaining match
+  printf '%s\n' "$services" | head -n 1
 }
 
 discover_alexa_media_players() {
@@ -110,7 +161,9 @@ send_notify_service() {
     payload="$(jq -nc --arg m "$message" '{message:$m}')"
   fi
 
-  api POST "/api/services/notify/${service_name}" "$payload"
+  local response
+  response="$(api POST "/api/services/notify/${service_name}" "$payload")"
+  validate_service_response "$response"
 }
 
 send_alexa_media_notify() {
@@ -118,7 +171,9 @@ send_alexa_media_notify() {
   local message="$2"
   local payload
   payload="$(jq -nc --arg m "$message" --arg t "$target_media_player" '{target:[$t],message:$m,data:{type:"tts"}}')"
-  api POST "/api/services/alexa_media/notify" "$payload"
+  local response
+  response="$(api POST "/api/services/alexa_media/notify" "$payload")"
+  validate_service_response "$response"
 }
 
 resolve_mode_and_send() {
@@ -142,7 +197,7 @@ resolve_mode_and_send() {
 
     # Fallback: best notify service that looks like Alexa
     local notify_service
-    notify_service="$(discover_alexa_notify_services | head -n 1 || true)"
+    notify_service="$(pick_preferred_alexa_notify_service || true)"
     if [[ -n "$notify_service" ]]; then
       send_notify_service "$notify_service" "$message" "$target"
       echo "OK notify.${notify_service} -> ${target}"
@@ -160,7 +215,7 @@ resolve_mode_and_send() {
 
   # Auto mode with no explicit target
   local auto_notify
-  auto_notify="$(discover_alexa_notify_services | head -n 1 || true)"
+  auto_notify="$(pick_preferred_alexa_notify_service || true)"
   if [[ -n "$auto_notify" ]]; then
     send_notify_service "$auto_notify" "$message"
     echo "OK auto notify.${auto_notify}"
