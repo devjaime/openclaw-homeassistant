@@ -176,6 +176,16 @@ send_alexa_media_notify() {
   validate_service_response "$response"
 }
 
+send_media_player_custom_command() {
+  local target_media_player="$1"
+  local command_text="$2"
+  local payload
+  payload="$(jq -nc --arg eid "$target_media_player" --arg txt "$command_text" '{entity_id:$eid,media_content_type:"custom",media_content_id:$txt}')"
+  local response
+  response="$(api POST "/api/services/media_player/play_media" "$payload")"
+  validate_service_response "$response"
+}
+
 resolve_mode_and_send() {
   local message="$1"
   local target="${2:-}"
@@ -240,6 +250,19 @@ resolve_mode_and_send() {
   return 2
 }
 
+resolve_command_and_send() {
+  local command_text="$1"
+  local target="${2:-media_player.echo_dot_de_jaime}"
+
+  if [[ "$target" != media_player.* ]]; then
+    echo "Target must be media_player.* for command mode (got: ${target})" >&2
+    return 2
+  fi
+
+  send_media_player_custom_command "$target" "$command_text"
+  echo "OK command ${target}: ${command_text}"
+}
+
 case "$cmd" in
   ping)
     require_up
@@ -267,6 +290,16 @@ case "$cmd" in
     fi
     resolve_mode_and_send "$msg" "$target"
     ;;
+  command)
+    require_up
+    msg="${1:-}"
+    target="${2:-}"
+    if [[ -z "$msg" ]]; then
+      echo "Usage: alexa.sh command \"orden\" [media_player.xxx]" >&2
+      exit 1
+    fi
+    resolve_command_and_send "$msg" "$target"
+    ;;
   test)
     require_up
     target="${1:-}"
@@ -278,11 +311,13 @@ Usage:
   alexa.sh ping
   alexa.sh discover
   alexa.sh send "mensaje" [notify.xxx|media_player.xxx]
+  alexa.sh command "orden" [media_player.xxx]
   alexa.sh test [notify.xxx|media_player.xxx]
 
 Examples:
   ./alexa.sh discover
   ./alexa.sh send "Jaime esta almorzando"
+  ./alexa.sh command "enciende aire dormitorio"
   ./alexa.sh send "Abre la puerta" notify.alexa_media_sala
   ./alexa.sh send "Hay movimiento en patio" media_player.echo_dot_sala
 USAGE
