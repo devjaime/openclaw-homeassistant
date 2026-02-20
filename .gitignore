@@ -1,0 +1,17 @@
+# OS
+.DS_Store
+
+# Home Assistant runtime/secrets
+homeassistant-infra/config/
+homeassistant-infra/backups/
+homeassistant-infra/.env
+homeassistant-tools/media/
+
+# Node/Python deps
+**/node_modules/
+**/.venv/
+
+# Logs
+*.log
+openclaw.partial.*/
+openclaw.git.internal.*/
