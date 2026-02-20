@@ -22,3 +22,23 @@ docker compose up -d
 
 ## Nota
 No se versionan secretos ni config privada de Home Assistant.
+
+## Alexa (voz) en Home Assistant
+
+1. Instalar componente custom Alexa Media Player:
+```bash
+cd homeassistant-infra
+./scripts/install-alexa-media.sh
+```
+
+2. Completar login Amazon en la UI:
+- `Settings` -> `Devices & Services` -> `Add Integration`
+- Buscar `Alexa Media Player`
+- Iniciar sesion (incluye 2FA/captcha)
+
+3. Verificar rutas de voz disponibles:
+```bash
+./homeassistant-tools/alexa.sh discover
+```
+
+Cuando aparezcan `notify.alexa_*` o `media_player.echo_*`, ya queda operativo el envio de voz.
