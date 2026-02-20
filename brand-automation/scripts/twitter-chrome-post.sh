@@ -190,7 +190,20 @@ tell application "Google Chrome"
   set clickState to execute active tab of front window javascript "(function(){var b=document.querySelector('button[data-testid=\\\"tweetButtonInline\\\"],button[data-testid=\\\"tweetButton\\\"]'); if(!b){return 'no_button'}; b.click(); return 'posted';})()"
 end tell
 
-return clickState
+if clickState is not "posted" then
+  return "click_failed:" & clickState
+end if
+
+set postState to "pending"
+repeat 20 times
+  delay 0.5
+  tell application "Google Chrome"
+    set postState to execute active tab of front window javascript "(function(){var hasComposer=!!document.querySelector('div[data-testid=\\\"tweetTextarea_0\\\"][role=\\\"textbox\\\"]'); var inCompose=location.href.indexOf('/compose/post')!==-1; var toast=!!document.querySelector('[data-testid=\\\"toast\\\"]'); if((!hasComposer)&&(!inCompose)) return 'confirmed'; if(toast) return 'toast'; return 'pending';})()"
+  end tell
+  if postState is "confirmed" then exit repeat
+end repeat
+
+return "post_state:" & postState
 end run
 OSA
 )"
@@ -231,7 +244,22 @@ tell application "Safari"
   end tell
 end tell
 
-return clickState
+if clickState is not "posted" then
+  return "click_failed:" & clickState
+end if
+
+set postState to "pending"
+repeat 20 times
+  delay 0.5
+  tell application "Safari"
+    tell front document
+      set postState to do JavaScript "(function(){var hasComposer=!!document.querySelector('div[data-testid=\\\"tweetTextarea_0\\\"][role=\\\"textbox\\\"]'); var inCompose=location.href.indexOf('/compose/post')!==-1; var toast=!!document.querySelector('[data-testid=\\\"toast\\\"]'); if((!hasComposer)&&(!inCompose)) return 'confirmed'; if(toast) return 'toast'; return 'pending';})()"
+    end tell
+  end tell
+  if postState is "confirmed" then exit repeat
+end repeat
+
+return "post_state:" & postState
 end run
 OSA
 )"
@@ -252,4 +280,14 @@ if [[ "$OSA_CODE" -ne 0 ]]; then
   exit 1
 fi
 
-printf 'POSTED ok len=%s\n' "$LEN"
+if printf '%s' "$OSA_OUT" | rg -q "post_state:confirmed"; then
+  printf 'POSTED_CONFIRMED ok len=%s\n' "$LEN"
+  exit 0
+fi
+
+if printf '%s' "$OSA_OUT" | rg -q "post_state:toast"; then
+  printf 'POST_CLICK_UNCONFIRMED toast_seen len=%s\n' "$LEN"
+  exit 0
+fi
+
+printf 'POST_CLICK_UNCONFIRMED pending len=%s\n' "$LEN"

@@ -19,9 +19,12 @@ run_and_route() {
   if printf '%s' "$out" | rg -q '^OPENED intent_url manual_post_required'; then
     echo "$out"
     echo "ROUTED twitter-post mode=manual-open browser=$BROWSER"
-  elif printf '%s' "$out" | rg -q '^POSTED ok'; then
+  elif printf '%s' "$out" | rg -q '^POSTED_CONFIRMED'; then
     echo "$out"
     echo "ROUTED twitter-post mode=publish browser=$BROWSER"
+  elif printf '%s' "$out" | rg -q '^POST_CLICK_UNCONFIRMED'; then
+    echo "$out"
+    echo "ROUTED twitter-post mode=unconfirmed browser=$BROWSER"
   else
     echo "$out"
   fi

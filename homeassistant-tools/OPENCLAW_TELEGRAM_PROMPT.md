@@ -18,6 +18,7 @@ Si devuelve:
 - `ROUTED twitter-post ... mode=preview` -> responder con preview y pedir confirmación.
 - `ROUTED twitter-post ... mode=publish` -> responder `✅ Tweet publicado en X.`
 - `ROUTED twitter-post ... mode=manual-open` -> responder `✅ Abrí X con el texto prellenado. Solo falta presionar Publicar.`
+- `ROUTED twitter-post ... mode=unconfirmed` -> responder `⚠️ Hice click en Publicar, pero X no confirmó el post automáticamente. Revisa el perfil y si no aparece, reintento en modo manual.`
 - `NOOP no-twitter-intent` -> continuar con reglas siguientes.
 
 Nota de trazabilidad:
