@@ -148,13 +148,26 @@ function buildDailyData(usageData) {
 
 function buildModelPieData(usageData) {
   const models = (usageData.models || []).filter((m) => m.usage.total > 0);
+  // Show: real cost + equivalent cloud cost side by side as doughnut
+  const allLabels = [];
+  const allData   = [];
+  const allColors = [];
+  models.forEach((m, i) => {
+    const baseColor = CHART_COLORS[i % CHART_COLORS.length];
+    if (m.localEstimatedFree) {
+      // local: show equivalent cloud cost in yellow
+      allLabels.push(`${m.model.split('/').pop()} (equiv.☁️)`);
+      allData.push(m.equivalentCostUsd || 0);
+      allColors.push('rgba(245,158,11,0.75)');
+    } else {
+      allLabels.push(m.model.split('/').pop());
+      allData.push(m.costUsd || 0);
+      allColors.push(baseColor);
+    }
+  });
   return {
-    labels: models.map((m) => m.model.split('/').pop()),
-    datasets: [{
-      data: models.map((m) => m.usage.total),
-      backgroundColor: models.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]),
-      borderWidth: 0,
-    }],
+    labels: allLabels,
+    datasets: [{ data: allData, backgroundColor: allColors, borderWidth: 0 }],
   };
 }
 
@@ -194,7 +207,15 @@ function updateCharts(usageData) {
         maintainAspectRatio: false,
         plugins: {
           legend: { position: 'right', labels: { color: '#94a3b8', font: { size: 11 }, boxWidth: 12 } },
-          tooltip: { backgroundColor: '#1a1d27', titleColor: '#e2e8f0', bodyColor: '#94a3b8' },
+          tooltip: {
+            backgroundColor: '#1a1d27', titleColor: '#e2e8f0', bodyColor: '#94a3b8',
+            callbacks: {
+              label: (ctx) => {
+                const val = ctx.parsed;
+                return val === 0 ? ' $0 (gratis)' : ` US$${val.toFixed(4)}`;
+              },
+            },
+          },
         },
       },
     });
@@ -279,8 +300,10 @@ function renderUsage(data) {
     { label: `Tokens total (${usage.lookbackDays || 7}d)`, value: fmtNum(totals.total), className: 'ok' },
     { label: 'Input tokens', value: fmtNum(totals.input), className: 'info' },
     { label: 'Output tokens', value: fmtNum(totals.output), className: 'info' },
-    { label: 'USD estimado', value: fmtMoney(totals.costUsd, 'USD'), className: totals.costUsd > 0.5 ? 'warn' : 'ok' },
-    { label: `CLP estimado`, value: fmtMoney(totals.costClp, 'CLP'), className: totals.costClp > 500 ? 'warn' : 'ok' },
+    { label: 'Costo real USD', value: fmtMoney(totals.costUsd, 'USD'), className: totals.costUsd > 0.5 ? 'warn' : 'ok' },
+    { label: 'Costo real CLP', value: fmtMoney(totals.costClp, 'CLP'), className: totals.costClp > 500 ? 'warn' : 'ok' },
+    { label: '☁️ Equiv. cloud USD', value: fmtMoney((totals.costUsd || 0) + (totals.equivalentCostUsd || 0), 'USD'), className: 'warn' },
+    { label: '💰 Ahorro USD (local)', value: fmtMoney(totals.savedUsd || 0, 'USD'), className: 'ok' },
   ].map((k) =>
     `<div class="kpi"><div class="label">${k.label}</div><div class="value ${k.className}">${k.value}</div></div>`
   ).join('');
@@ -288,22 +311,76 @@ function renderUsage(data) {
   const tbody = document.getElementById('usageModels');
   const rows = usage.models || [];
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="color:var(--text2)">Sin datos de uso todavía.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" style="color:var(--text2)">Sin datos de uso todavía.</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map((r) => {
     const badge = modelBadgeClass(r.model);
+    const realCost = r.localEstimatedFree
+      ? `<span style="color:var(--green);font-weight:700">$0 <span style="font-size:10px;font-weight:400">(gratis)</span></span>`
+      : fmtMoney(r.costUsd, 'USD');
+    const realCostClp = r.localEstimatedFree
+      ? `<span style="color:var(--green);font-weight:700">$0</span>`
+      : fmtMoney(r.costClp, 'CLP');
+    const eqCost = r.localEstimatedFree
+      ? `<span style="color:var(--yellow)">${fmtMoney(r.equivalentCostUsd, 'USD')}</span>`
+      : `<span style="color:var(--text2)">—</span>`;
+    const eqCostClp = r.localEstimatedFree
+      ? `<span style="color:var(--yellow)">${fmtMoney(r.equivalentCostClp, 'CLP')}</span>`
+      : `<span style="color:var(--text2)">—</span>`;
     return `<tr>
       <td><span class="model-badge ${badge}">${r.model.split('/').pop()}</span>
-        ${r.localEstimatedFree ? '<span class="ok" style="font-size:10px;margin-left:4px">local $0</span>' : ''}</td>
+        ${r.localEstimatedFree ? ' <span style="font-size:10px;color:var(--green)">● local</span>' : ''}</td>
       <td>${fmtNum(r.usage.calls)}</td>
       <td>${fmtNum(r.usage.input)}</td>
       <td>${fmtNum(r.usage.output)}</td>
       <td>${fmtNum(r.usage.total)}</td>
-      <td>${r.localEstimatedFree ? '<span style="color:var(--text2)">~$0</span>' : fmtMoney(r.costUsd, 'USD')}</td>
-      <td>${r.localEstimatedFree ? '<span style="color:var(--text2)">~$0</span>' : fmtMoney(r.costClp, 'CLP')}</td>
+      <td>${realCost}</td>
+      <td>${realCostClp}</td>
+      <td>${eqCost}</td>
+      <td>${eqCostClp}</td>
     </tr>`;
   }).join('');
+}
+
+// ── última actividad ──────────────────────────────────────────────────────────
+const TRIGGER_ICONS = {
+  telegram: '✈️ Telegram',
+  cron:     '⏰ Cron job',
+  discord:  '💬 Discord',
+  slack:    '🔔 Slack',
+  'api/manual': '🖥️ API / manual',
+};
+
+function renderLastActivity(data) {
+  const el = document.getElementById('lastActivity');
+  if (!el) return;
+  const act = data.lastActivity;
+  if (!act) {
+    el.innerHTML = '<span style="color:var(--text2);font-size:13px">Sin actividad detectada todavía.</span>';
+    return;
+  }
+  const tsStr = act.ts ? new Date(act.ts).toLocaleString('es-CL', { dateStyle: 'full', timeStyle: 'medium' }) : '—';
+  const triggerLabel = TRIGGER_ICONS[act.trigger] || act.trigger || '—';
+  const roleLabel = act.role ? `<span style="color:var(--text2);font-size:11px">[${act.role}]</span> ` : '';
+  const msgEscaped = (act.msg || 'Sin detalle disponible').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  el.innerHTML = `
+    <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start">
+      <div class="kpi" style="min-width:180px">
+        <div class="label">Fecha y hora</div>
+        <div class="value ok" style="font-size:14px">${tsStr}</div>
+      </div>
+      <div class="kpi" style="min-width:140px">
+        <div class="label">Llamado por</div>
+        <div class="value info" style="font-size:15px">${triggerLabel}</div>
+      </div>
+      <div class="kpi" style="flex:1;min-width:260px">
+        <div class="label">Último mensaje / acción</div>
+        <div style="font-size:12px;font-family:var(--font);margin-top:4px;color:var(--text);word-break:break-word">
+          ${roleLabel}${msgEscaped}
+        </div>
+      </div>
+    </div>`;
 }
 
 function renderProjects(data) {
@@ -363,6 +440,7 @@ async function load() {
     renderTelegram(data.activity.telegramEvents || []);
     renderLogContainer('openclawLogs', data.logs.openclaw || []);
     renderLogContainer('haLogs', data.logs.homeassistant || []);
+    renderLastActivity(data);
     updateCharts(data.usage || {});
     setText('lastUpdate', `Última actualización: ${new Date().toLocaleString('es-CL')}`);
   } catch (e) {

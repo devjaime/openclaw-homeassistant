@@ -152,6 +152,12 @@
       <div id="modelInfo"></div>
     </section>
 
+    <!-- Última actividad -->
+    <section class="card span4" id="lastActivityCard">
+      <h2>Última actividad del agente</h2>
+      <div id="lastActivity"></div>
+    </section>
+
     <!-- Gráfico diario tokens -->
     <section class="card span2">
       <h2>Tokens por día (últimos 7 días)</h2>
@@ -170,11 +176,11 @@
       <div id="usageSummary" class="kpis"></div>
       <table>
         <thead>
-          <tr><th>Modelo</th><th>Calls</th><th>Input</th><th>Output</th><th>Total tokens</th><th>USD (est.)</th><th>CLP (est.)</th></tr>
+          <tr><th>Modelo</th><th>Calls</th><th>Input</th><th>Output</th><th>Total tokens</th><th>USD real</th><th>CLP real</th><th>USD equivalente cloud ☁️</th><th>CLP equivalente ☁️</th></tr>
         </thead>
         <tbody id="usageModels"></tbody>
       </table>
-      <p class="hint">⚠️ Los costos son estimados. Modelos locales (Ollama) tienen costo real $0.</p>
+      <p class="hint">☁️ Equivalente cloud = costo estimado si se usara GPT-4o-mini ($0,15/$0,60 por 1M tokens) para los modelos locales gratuitos.</p>
     </section>
 
     <!-- Commits -->

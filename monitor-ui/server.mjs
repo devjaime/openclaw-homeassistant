@@ -35,6 +35,25 @@ const MODEL_PRICE_PER_TOKEN_USD = {
   },
 };
 
+// Precio de referencia "equivalente cloud" para modelos locales/gratuitos.
+// Usamos GPT-4o-mini como referencia de modelo small de bajo costo.
+const CLOUD_EQUIVALENT_PRICE = {
+  input:  0.15 / 1_000_000,  // USD por token input  (GPT-4o-mini ref)
+  output: 0.60 / 1_000_000,  // USD por token output (GPT-4o-mini ref)
+};
+
+function isLocalModel(modelKey) {
+  const k = String(modelKey || '').toLowerCase();
+  return k.startsWith('custom-127-0-0-1-11434/') || k.includes('qwen') || k.includes('deepseek') || k.includes('ollama');
+}
+
+function equivalentCloudCostUsd(usage) {
+  return (
+    n(usage.input)  * CLOUD_EQUIVALENT_PRICE.input +
+    n(usage.output) * CLOUD_EQUIVALENT_PRICE.output
+  );
+}
+
 const PROJECT_REPOS = [
   { id: 'humanloop', label: 'humanloop.cl', path: '/Users/devjaime/.openclaw/workspace/humanloop' },
   { id: 'vocari', label: 'vocari.cl (orienta-ai)', path: '/Users/devjaime/.openclaw/workspace/orienta-ai' },
@@ -274,14 +293,17 @@ async function collectUsageStats() {
   }
 
   const models = Array.from(usageByModel.entries()).map(([model, usage]) => {
-    const usd = estimateCostUsd(model, usage);
+    const isLocal = isLocalModel(model);
+    const usd = isLocal ? 0 : estimateCostUsd(model, usage);
+    const eqUsd = isLocal ? equivalentCloudCostUsd(usage) : 0;
     return {
       model,
       usage,
       costUsd: usd,
       costClp: usd * USD_CLP_RATE,
-      localEstimatedFree:
-        model.startsWith('custom-127-0-0-1-11434/') || model.includes('/qwen') || model.includes('/deepseek'),
+      equivalentCostUsd: eqUsd,
+      equivalentCostClp: eqUsd * USD_CLP_RATE,
+      localEstimatedFree: isLocal,
     };
   });
 
@@ -294,18 +316,87 @@ async function collectUsageStats() {
       acc.total += m.usage.total;
       acc.costUsd += m.costUsd;
       acc.costClp += m.costClp;
+      acc.equivalentCostUsd += m.equivalentCostUsd;
+      acc.equivalentCostClp += m.equivalentCostClp;
+      acc.savedUsd += m.localEstimatedFree ? m.equivalentCostUsd : 0;
+      acc.savedClp += m.localEstimatedFree ? m.equivalentCostClp : 0;
       return acc;
     },
-    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, costUsd: 0, costClp: 0 },
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0,
+      costUsd: 0, costClp: 0, equivalentCostUsd: 0, equivalentCostClp: 0,
+      savedUsd: 0, savedClp: 0 },
   );
 
   return {
     lookbackDays: USAGE_LOOKBACK_DAYS,
     usdClpRate: USD_CLP_RATE,
+    cloudEquivalentRef: 'GPT-4o-mini ($0.15/$0.60 por 1M tokens)',
     models: models.sort((a, b) => b.usage.total - a.usage.total),
     totals,
     daily,
   };
+}
+
+// ── última actividad del agente ───────────────────────────────────────────────
+async function collectLastActivity() {
+  const sessionRoot = path.join(process.env.HOME || '', '.openclaw', 'agents', 'main', 'sessions');
+  const cronRoot    = path.join(process.env.HOME || '', '.openclaw', 'cron', 'runs');
+
+  async function newestJsonl(root) {
+    const files = await listRecentJsonlFiles(root, 5);
+    return files[0] || null;
+  }
+
+  async function parseActivity(file, trigger) {
+    if (!file) return null;
+    const lines = await readLastLines(file, 200);
+    let lastTs = null;
+    let lastMsg = null;
+    let lastRole = null;
+    for (const line of lines) {
+      const row = safeJsonParse(line, null);
+      if (!row) continue;
+      const ts = row.timestamp ? Date.parse(row.timestamp) : (row.ts || null);
+      if (ts) lastTs = ts;
+      // detect message content
+      const content =
+        row.content || row.text ||
+        (row.message && typeof row.message === 'string' ? row.message : null) ||
+        (row.message && row.message.content ? row.message.content : null);
+      const role = row.role || row.type || (row.message && row.message.role) || null;
+      if (content && typeof content === 'string' && content.length > 2) {
+        lastMsg = content.slice(0, 200);
+        lastRole = role;
+      }
+    }
+    return lastTs ? { ts: lastTs, msg: lastMsg, role: lastRole, trigger, file: path.basename(file) } : null;
+  }
+
+  const [sessionFile, cronFile] = await Promise.all([
+    newestJsonl(sessionRoot),
+    newestJsonl(cronRoot),
+  ]);
+
+  const [sessionAct, cronAct] = await Promise.all([
+    parseActivity(sessionFile, 'session'),
+    parseActivity(cronFile, 'cron'),
+  ]);
+
+  // determine actual trigger from path/content
+  function refineTrigger(act) {
+    if (!act) return act;
+    const fname = (act.file || '').toLowerCase();
+    const msg   = (act.msg  || '').toLowerCase();
+    if (fname.includes('telegram') || msg.includes('telegram')) return { ...act, trigger: 'telegram' };
+    if (fname.includes('cron') || act.trigger === 'cron')       return { ...act, trigger: 'cron' };
+    if (fname.includes('discord'))   return { ...act, trigger: 'discord' };
+    if (fname.includes('slack'))     return { ...act, trigger: 'slack' };
+    return { ...act, trigger: 'api/manual' };
+  }
+
+  const candidates = [refineTrigger(sessionAct), refineTrigger(cronAct)].filter(Boolean);
+  candidates.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  return candidates[0] || null;
 }
 
 function gitCount(repo, sinceExpr) {
@@ -393,6 +484,7 @@ async function buildStatus() {
   const cron = await getCronJobs(cfg);
   const usageStats = await collectUsageStats();
   const projectStats = await collectProjectStats();
+  const lastActivity = await collectLastActivity();
 
   const errCount = openclawLogs.filter((l) => /\berror\b|failed|unauthorized|timeout/i.test(l)).length;
   const telegramEvents = openclawLogs.filter((l) => /telegram/i.test(l)).slice(-10);
@@ -437,6 +529,7 @@ async function buildStatus() {
     },
     usage: usageStats,
     projects: projectStats,
+    lastActivity,
     logs: {
       openclaw: openclawLogs.slice(-120),
       homeassistant: haLogs.slice(-120),
