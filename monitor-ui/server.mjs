@@ -44,7 +44,12 @@ const CLOUD_EQUIVALENT_PRICE = {
 
 function isLocalModel(modelKey) {
   const k = String(modelKey || '').toLowerCase();
-  return k.startsWith('custom-127-0-0-1-11434/') || k.includes('qwen') || k.includes('deepseek') || k.includes('ollama');
+  return (
+    k.startsWith('custom-127-0-0-1-11434/') ||
+    k.includes('qwen') || k.includes('deepseek') || k.includes('ollama') ||
+    k.includes(':free') ||          // OpenRouter free tier
+    k.startsWith('huggingface/')    // HuggingFace serverless (generalmente gratis)
+  );
 }
 
 function equivalentCloudCostUsd(usage) {
