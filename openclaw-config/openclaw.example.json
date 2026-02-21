@@ -1,0 +1,496 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.2.13",
+    "lastTouchedAt": "2026-02-19T03:54:24.605Z"
+  },
+  "wizard": {
+    "lastRunAt": "2026-02-14T07:22:10.428Z",
+    "lastRunVersion": "2026.2.13",
+    "lastRunCommand": "onboard",
+    "lastRunMode": "local"
+  },
+  "auth": {
+    "profiles": {
+      "minimax-portal:default": {
+        "provider": "minimax-portal",
+        "mode": "oauth"
+      }
+    }
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "custom-127-0-0-1-11434": {
+        "baseUrl": "http://127.0.0.1:11434/v1",
+        "apiKey": "ollama",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "deepseek-coder",
+            "name": "deepseek-coder (Custom Provider)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 4096,
+            "maxTokens": 4096
+          },
+          {
+            "id": "minimax-m2.5:cloud",
+            "name": "minimax-m2.5:cloud (Custom Provider)",
+            "api": "ollama",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 4096,
+            "maxTokens": 4096
+          },
+          {
+            "id": "qwen2.5:7b",
+            "name": "qwen2.5:7b (Custom Provider)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 32768,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen2.5vl:7b",
+            "name": "qwen2.5vl:7b (Custom Provider)",
+            "reasoning": false,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 32768,
+            "maxTokens": 4096
+          }
+        ]
+      },
+      "minimax-portal": {
+        "baseUrl": "https://api.minimax.io/anthropic",
+        "apiKey": "minimax-oauth",
+        "api": "anthropic-messages",
+        "models": [
+          {
+            "id": "MiniMax-M2.1",
+            "name": "MiniMax M2.1",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "MiniMax-M2.5",
+            "name": "MiniMax M2.5",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          }
+        ]
+      },
+      "openrouter": {
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "apiKey": "OPENROUTER_API_KEY",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "deepseek/deepseek-r1-0528:free",
+            "name": "DeepSeek R1 0528 (gratis)",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 163840,
+            "maxTokens": 16384
+          },
+          {
+            "id": "qwen/qwen3-coder:free",
+            "name": "Qwen3 Coder 480B (gratis)",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 262000,
+            "maxTokens": 16384
+          },
+          {
+            "id": "openai/gpt-oss-120b:free",
+            "name": "GPT OSS 120B (gratis)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 131072,
+            "maxTokens": 16384
+          }
+        ]
+      },
+      "huggingface": {
+        "baseUrl": "https://router.huggingface.co/v1",
+        "apiKey": "HUGGINGFACE_HUB_TOKEN",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "moonshotai/Kimi-K2.5",
+            "name": "Kimi K2.5 (HuggingFace)",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 262144,
+            "maxTokens": 16384
+          }
+        ]
+      },
+      "google": {
+        "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+        "apiKey": "GEMINI_API_KEY",
+        "api": "google-generative-ai",
+        "models": [
+          {
+            "id": "gemini-2.5-flash-lite",
+            "name": "Gemini 2.5 Flash Lite",
+            "reasoning": false,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openrouter/qwen/qwen3-coder:free"
+      },
+      "models": {
+        "google/gemini-2.5-flash-lite": {
+          "alias": "gemini"
+        },
+        "openrouter/deepseek/deepseek-r1-0528:free": {
+          "alias": "deepseek"
+        },
+        "openrouter/qwen/qwen3-coder:free": {
+          "alias": "qwen-coder"
+        },
+        "openrouter/openai/gpt-oss-120b:free": {
+          "alias": "gpt-oss"
+        },
+        "minimax-portal/MiniMax-M2.5": {
+          "alias": "minimax"
+        },
+        "minimax-portal/MiniMax-M2.1": {
+          "alias": "minimax-m2.1"
+        },
+        "openrouter/moonshotai/kimi-k2.5": {
+          "alias": "kimi-paid"
+        },
+        "huggingface/moonshotai/Kimi-K2.5": {
+          "alias": "kimi-hf"
+        },
+        "custom-127-0-0-1-11434/qwen2.5vl:7b": {
+          "alias": "qwen2.5vl"
+        },
+        "custom-127-0-0-1-11434/deepseek-coder": {
+          "alias": "deepseek-coder"
+        }
+      },
+      "workspace": "/Users/devjaime/.openclaw/workspace",
+      "compaction": {
+        "mode": "safeguard"
+      },
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 8
+      },
+      "sandbox": {
+        "mode": "non-main",
+        "workspaceAccess": "rw",
+        "scope": "agent",
+        "perSession": true,
+        "workspaceRoot": "/Users/devjaime/.openclaw/sandbox-workspaces"
+      }
+    }
+  },
+  "tools": {
+    "elevated": {
+      "enabled": true,
+      "allowFrom": {
+        "telegram": [
+          "1540433103"
+        ]
+      }
+    },
+    "exec": {
+      "host": "gateway",
+      "security": "full",
+      "ask": "off",
+      "safeBins": [
+        "alexa-intent.sh",
+        "alexa.sh",
+        "bash",
+        "bun",
+        "cat",
+        "curl",
+        "echo",
+        "find",
+        "gh",
+        "git",
+        "head",
+        "jq",
+        "ls",
+        "node",
+        "npm",
+        "npx",
+        "pnpm",
+        "pwd",
+        "remotion",
+        "render-videos.sh",
+        "rg",
+        "sh",
+        "stat",
+        "tail",
+        "wc",
+        "zsh"
+      ],
+      "timeoutSec": 300,
+      "notifyOnExit": true,
+      "pathPrepend": [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin"
+      ]
+    },
+    "media": {
+      "concurrency": 2,
+      "image": {
+        "enabled": true,
+        "maxBytes": 15728640,
+        "models": [
+          {
+            "provider": "google",
+            "model": "gemini-3-flash-preview"
+          },
+          {
+            "provider": "google",
+            "model": "gemini-2.5-flash-lite"
+          }
+        ]
+      },
+      "audio": {
+        "enabled": true,
+        "maxBytes": 15728640,
+        "models": [
+          {
+            "provider": "google",
+            "model": "gemini-3-flash-preview"
+          },
+          {
+            "provider": "google",
+            "model": "gemini-2.5-flash-lite"
+          }
+        ]
+      },
+      "video": {
+        "enabled": true,
+        "maxBytes": 26214400,
+        "models": [
+          {
+            "provider": "google",
+            "model": "gemini-3-flash-preview"
+          },
+          {
+            "provider": "google",
+            "model": "gemini-2.5-flash-lite"
+          }
+        ]
+      }
+    },
+    "profile": "full"
+  },
+  "messages": {
+    "ackReactionScope": "group-mentions",
+    "tts": {
+      "auto": "inbound",
+      "mode": "final",
+      "provider": "edge",
+      "maxTextLength": 2000,
+      "timeoutMs": 30000,
+      "edge": {
+        "enabled": true,
+        "voice": "es-ES-AlvaroNeural",
+        "lang": "es-ES",
+        "outputFormat": "audio-24khz-48kbitrate-mono-mp3"
+      }
+    }
+  },
+  "commands": {
+    "native": true,
+    "nativeSkills": true,
+    "ownerAllowFrom": [
+      1540433103,
+      "1540433103",
+      "telegram:1540433103"
+    ],
+    "bash": true,
+    "text": true,
+    "useAccessGroups": false
+  },
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "session-memory": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  "channels": {
+    "telegram": {
+      "name": "devjaime_bot",
+      "enabled": true,
+      "dmPolicy": "allowlist",
+      "botToken": "TELEGRAM_BOT_TOKEN_REDACTED",
+      "groupPolicy": "allowlist",
+      "streamMode": "off",
+      "allowFrom": [
+        1540433103,
+        "1540433103"
+      ],
+      "groups": {
+        "*": {
+          "tools": {
+            "allow": [
+              "*"
+            ],
+            "deny": []
+          }
+        }
+      },
+      "commands": {
+        "native": true,
+        "nativeSkills": true
+      }
+    }
+  },
+  "gateway": {
+    "port": 18889,
+    "mode": "local",
+    "bind": "loopback",
+    "auth": {
+      "mode": "token",
+      "token": "GATEWAY_TOKEN_REDACTED"
+    },
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    },
+    "nodes": {
+      "browser": {
+        "mode": "off"
+      },
+      "allowCommands": [],
+      "denyCommands": [
+        "canvas.present",
+        "canvas.hide",
+        "canvas.navigate",
+        "canvas.eval",
+        "canvas.snapshot",
+        "canvas.a2ui.push",
+        "canvas.a2ui.pushJSONL",
+        "canvas.a2ui.reset"
+      ]
+    }
+  },
+  "plugins": {
+    "entries": {
+      "telegram": {
+        "enabled": true
+      },
+      "minimax-portal-auth": {
+        "enabled": true
+      }
+    }
+  }
+}
