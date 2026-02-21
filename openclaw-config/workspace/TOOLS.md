@@ -98,9 +98,3 @@ npx --yes remotion render /Users/devjaime/.openclaw/workspace/humanloop/demos/ai
 ```
 - Prompt base sugerido:
 `/Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant/homeassistant-tools/OPENCLAW_TELEGRAM_PROMPT.md`
-
-## Modelo Default Activo
-
-- **Default:** `openrouter/moonshotai/kimi-k2.5:free` (alias: `kimi`)
-- **Fallback manual:** `/model minimax` o `/model gemini` desde Telegram
-- Kimi K2.5 es el mejor modelo agéntico disponible (1T params, diseñado para tool use)
