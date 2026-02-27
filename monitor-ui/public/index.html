@@ -4,45 +4,76 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Panel OpenClaw + Home Assistant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
     :root {
-      --bg: #0f1117;
-      --bg2: #1a1d27;
-      --bg3: #222536;
-      --border: #2e3248;
-      --text: #e2e8f0;
-      --text2: #94a3b8;
-      --green: #22c55e;
-      --red: #ef4444;
-      --yellow: #f59e0b;
-      --blue: #3b82f6;
-      --purple: #a78bfa;
-      --cyan: #06b6d4;
+      --bg: #091018;
+      --bg2: #0f1b26;
+      --bg3: #142535;
+      --border: #26415a;
+      --text: #e8f1f8;
+      --text2: #89a7be;
+      --green: #18c87a;
+      --red: #ff5f56;
+      --yellow: #f0b429;
+      --blue: #19b5fe;
+      --purple: #00a6a6;
+      --cyan: #2dd4bf;
       --orange: #f97316;
-      --font: 'SF Mono', 'Fira Code', monospace;
+      --font: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+      --font-ui: 'Space Grotesk', 'Segoe UI', system-ui, sans-serif;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; font-size: 14px; }
+    body {
+      background:
+        radial-gradient(1200px 600px at 10% -10%, rgba(25,181,254,.16), transparent 60%),
+        radial-gradient(900px 500px at 90% 0%, rgba(240,180,41,.08), transparent 60%),
+        linear-gradient(180deg, #081019 0%, #070f17 100%);
+      color: var(--text);
+      font-family: var(--font-ui);
+      font-size: 14px;
+    }
 
     /* HEADER */
-    .top { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; background: var(--bg2); border-bottom: 1px solid var(--border); gap: 12px; flex-wrap: wrap; }
-    .top h1 { font-size: 18px; font-weight: 700; }
+    .top {
+      display: flex; align-items: center; justify-content: space-between; padding: 14px 20px;
+      background: linear-gradient(90deg, rgba(20,37,53,.95), rgba(15,27,38,.95));
+      border-bottom: 1px solid var(--border);
+      gap: 12px; flex-wrap: wrap;
+      backdrop-filter: blur(4px);
+    }
+    .top h1 { font-size: 18px; font-weight: 700; letter-spacing: .02em; }
     .top p { font-size: 12px; color: var(--text2); margin-top: 2px; }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; }
     .actions button, .actions a {
       padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;
       text-decoration: none; display: inline-block;
     }
-    .actions button { background: var(--blue); color: #fff; border: none; }
+    .actions button { background: linear-gradient(90deg, #1297d8, #19b5fe); color: #fff; border: none; }
     .actions a { background: var(--bg3); color: var(--text); border: 1px solid var(--border); }
     .actions button:hover { opacity: 0.85; }
+    .update-pill {
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      border: 1px solid var(--border);
+      background: var(--bg3);
+      color: var(--text2);
+      white-space: nowrap;
+    }
+    .update-pill.ok { color: var(--green); border-color: rgba(34,197,94,.35); }
+    .update-pill.warn { color: var(--yellow); border-color: rgba(245,158,11,.35); }
+    .update-pill.bad { color: var(--red); border-color: rgba(239,68,68,.35); }
     .pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; margin-right: 6px; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 
     /* GRID */
     main { padding: 16px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
-    .card { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+    .card { background: linear-gradient(180deg, rgba(15,27,38,.92), rgba(11,22,32,.92)); border: 1px solid var(--border); border-radius: 12px; padding: 16px; box-shadow: 0 10px 24px rgba(0,0,0,.22); }
     .card h2 { font-size: 13px; font-weight: 700; color: var(--text2); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 12px; }
     .span2 { grid-column: span 2; }
     .span4 { grid-column: span 4; }
@@ -51,7 +82,7 @@
 
     /* KPIS */
     .kpis { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
-    .kpi { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; min-width: 110px; }
+    .kpi { background: linear-gradient(180deg, rgba(20,37,53,.9), rgba(16,30,43,.9)); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; min-width: 110px; }
     .kpi .label { font-size: 11px; color: var(--text2); margin-bottom: 4px; }
     .kpi .value { font-size: 18px; font-weight: 700; }
     .ok { color: var(--green); }
@@ -118,6 +149,22 @@
     .model-gemini { background: rgba(6,182,212,.2);  color: var(--cyan); }
     .model-minmax { background: rgba(249,115,22,.2); color: var(--orange); }
     .model-other  { background: rgba(148,163,184,.2);color: var(--text2); }
+
+    .svc-grid { display: grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 10px; }
+    .svc-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--bg3); }
+    .svc-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .svc-title { font-weight: 700; font-size: 13px; }
+    .svc-state { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 12px; }
+    .svc-state.on { color: var(--green); background: rgba(34,197,94,.2); }
+    .svc-state.off { color: var(--red); background: rgba(239,68,68,.2); }
+    .svc-detail { color: var(--text2); font-size: 11px; margin-bottom: 8px; }
+    .svc-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .svc-btn { border: 1px solid var(--border); background: #111522; color: var(--text); border-radius: 6px; padding: 5px 10px; font-size: 11px; font-weight: 700; cursor: pointer; }
+    .svc-btn:hover { opacity: .9; }
+    .svc-btn.start { border-color: rgba(34,197,94,.35); color: var(--green); }
+    .svc-btn.restart { border-color: rgba(245,158,11,.35); color: var(--yellow); }
+    .svc-btn.stop { border-color: rgba(239,68,68,.35); color: var(--red); }
+    .svc-feedback { margin-top: 8px; font-size: 11px; color: var(--text2); min-height: 14px; }
   </style>
 </head>
 <body>
@@ -128,6 +175,10 @@
     </div>
     <div class="actions">
       <button id="refreshBtn">↻ Actualizar</button>
+      <button id="resetUsageBtn" title="Resetear contadores de tokens y costos desde ahora">⟲ Reset métricas</button>
+      <button id="refreshUpdateBtn" title="Consultar estado de actualización">⟳ Update</button>
+      <button id="copyGatewayAuthBtn" title="Copia URL + token para OpenClaw Control">🔑 Copiar token</button>
+      <span id="updateStatusPill" class="update-pill">Update: ...</span>
       <a id="openDashboard" target="_blank" rel="noreferrer">Dashboard OpenClaw</a>
       <a href="http://127.0.0.1:8123" target="_blank" rel="noreferrer">Home Assistant</a>
       <a href="http://127.0.0.1:5678" target="_blank" rel="noreferrer">n8n</a>
@@ -152,6 +203,11 @@
       <div id="modelInfo"></div>
     </section>
 
+    <section class="card span4">
+      <h2>Control de Servicios</h2>
+      <div id="serviceControls" class="svc-grid"></div>
+    </section>
+
     <!-- Última actividad -->
     <section class="card span4" id="lastActivityCard">
       <h2>Última actividad del agente</h2>
@@ -174,13 +230,51 @@
     <section class="card span4">
       <h2>Tokens y Gasto Estimado</h2>
       <div id="usageSummary" class="kpis"></div>
+      <p id="usageResetInfo" class="hint"></p>
       <table>
         <thead>
-          <tr><th>Modelo</th><th>Calls</th><th>Input</th><th>Output</th><th>Total tokens</th><th>USD real</th><th>CLP real</th><th>USD equivalente cloud ☁️</th><th>CLP equivalente ☁️</th></tr>
+          <tr><th>Modelo</th><th>Calls</th><th>Input</th><th>Output</th><th>Total tokens</th><th>USD real</th><th>CLP real</th><th>USD equivalente cloud ☁️</th><th>CLP equivalente ☁️</th><th>Fuente costo</th></tr>
         </thead>
         <tbody id="usageModels"></tbody>
       </table>
       <p class="hint">☁️ Equivalente cloud = costo estimado si se usara GPT-4o-mini ($0,15/$0,60 por 1M tokens) para los modelos locales gratuitos.</p>
+    </section>
+
+    <section class="card span4">
+      <h2>OpenRouter (desde último reset)</h2>
+      <div id="openrouterSummary" class="kpis"></div>
+      <table>
+        <thead>
+          <tr><th>Modelo OpenRouter</th><th>Calls</th><th>Input</th><th>Output</th><th>Total tokens</th><th>USD</th><th>CLP</th><th>Fuente costo</th></tr>
+        </thead>
+        <tbody id="openrouterModels"></tbody>
+      </table>
+      <p class="hint">Incluye gasto externo registrado en ledger para jobs fuera de sesiones estándar.</p>
+    </section>
+
+    <section class="card span4">
+      <h2>Apple Devices (Home Assistant)</h2>
+      <div id="appleSummary" class="kpis"></div>
+      <div id="appleMapHint" class="hint"></div>
+      <table>
+        <thead>
+          <tr><th>Dispositivo</th><th>Estado/Zona</th><th>Batería</th><th>GPS</th><th>Mapa</th><th>Actualizado</th></tr>
+        </thead>
+        <tbody id="appleDevices"></tbody>
+      </table>
+      <h2 style="margin-top:12px">Métricas Apple (sensores)</h2>
+      <table>
+        <thead>
+          <tr><th>Sensor</th><th>Valor</th><th>Unidad</th><th>Tipo</th><th>Actualizado</th></tr>
+        </thead>
+        <tbody id="appleMetrics"></tbody>
+      </table>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <select id="appleNotifyTarget" style="background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px;min-width:260px"></select>
+        <input id="appleNotifyMessage" placeholder="Mensaje para dispositivo Apple..." style="flex:1;min-width:280px;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px" />
+        <button id="appleNotifySend" style="padding:6px 12px;border:none;border-radius:6px;background:var(--blue);color:white;font-weight:700;cursor:pointer">Enviar</button>
+      </div>
+      <div id="appleNotifyStatus" class="hint"></div>
     </section>
 
     <!-- Commits -->

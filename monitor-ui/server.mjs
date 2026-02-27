@@ -15,10 +15,28 @@ const PORT = Number(process.env.MONITOR_UI_PORT || 18990);
 const OPENCLAW_CONFIG = process.env.OPENCLAW_CONFIG || path.join(process.env.HOME || '', '.openclaw', 'openclaw.json');
 const OPENCLAW_LOG_DIR = '/tmp/openclaw';
 const HA_URL = process.env.HA_URL || 'http://127.0.0.1:8123';
-const GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL || 'ws://127.0.0.1:18789';
+const ENV_GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL || '';
+const OPENCLAW_BIN = process.env.OPENCLAW_BIN || '/Users/devjaime/Library/pnpm/openclaw';
+const DOCKER_BIN = process.env.DOCKER_BIN || (
+  fs.existsSync('/usr/local/bin/docker') ? '/usr/local/bin/docker' :
+  fs.existsSync('/opt/homebrew/bin/docker') ? '/opt/homebrew/bin/docker' :
+  '/Applications/Docker.app/Contents/Resources/bin/docker'
+);
+const RUNTIME_PATH = [
+  '/opt/homebrew/bin',
+  '/usr/local/bin',
+  '/usr/bin',
+  '/bin',
+  process.env.PATH || '',
+].filter(Boolean).join(':');
 const USD_CLP_RATE = Number(process.env.USD_CLP_RATE || 950);
+const OPENROUTER_BUDGET_USD = Number(process.env.OPENROUTER_BUDGET_USD || 10);
 const USAGE_LOOKBACK_DAYS = Number(process.env.USAGE_LOOKBACK_DAYS || 7);
 const USAGE_MAX_FILES = Number(process.env.USAGE_MAX_FILES || 40);
+const EXTERNAL_COST_LEDGER = process.env.EXTERNAL_COST_LEDGER || '/Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant/openclaw-config/multi-model-foundation/data/cost-ledger.jsonl';
+const USAGE_RESET_STATE_PATH = process.env.USAGE_RESET_STATE_PATH || path.join(process.env.HOME || '', '.openclaw', 'monitor-usage-reset.json');
+const OPENROUTER_CREDITS_URL = process.env.OPENROUTER_CREDITS_URL || 'https://openrouter.ai/api/v1/credits';
+const HA_SECRETS_ENV_PATH = process.env.HA_SECRETS_ENV_PATH || path.join(process.env.HOME || '', '.openclaw', 'secrets.env');
 
 const MODEL_PRICE_PER_TOKEN_USD = {
   'google/gemini-2.5-flash-lite': {
@@ -32,6 +50,25 @@ const MODEL_PRICE_PER_TOKEN_USD = {
     output: 2.4 / 1_000_000,
     cacheRead: 0.15 / 1_000_000,
     cacheWrite: 0.6 / 1_000_000,
+  },
+  // OpenRouter paid models used in this setup (values in USD/token).
+  'minimax/minimax-m2.5': {
+    input: 0.0000003,
+    output: 0.0000011,
+    cacheRead: 0,
+    cacheWrite: 0,
+  },
+  'google/gemini-3-flash-preview': {
+    input: 0.0000005,
+    output: 0.000003,
+    cacheRead: 0,
+    cacheWrite: 0,
+  },
+  'moonshotai/kimi-k2.5': {
+    input: 0.00000045,
+    output: 0.0000022,
+    cacheRead: 0,
+    cacheWrite: 0,
   },
 };
 
@@ -112,6 +149,47 @@ function checkPort(host, port, timeoutMs = 1200) {
   });
 }
 
+function runShell(cmd, timeout = 12000) {
+  try {
+    const out = execSync(cmd, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout,
+      encoding: 'utf8',
+      shell: '/bin/bash',
+      env: { ...process.env, PATH: RUNTIME_PATH },
+    }).trim();
+    return { ok: true, output: out };
+  } catch (err) {
+    const stdout = err?.stdout ? String(err.stdout).trim() : '';
+    const stderr = err?.stderr ? String(err.stderr).trim() : '';
+    return {
+      ok: false,
+      output: [stdout, stderr, String(err?.message || 'command failed')].filter(Boolean).join('\n'),
+    };
+  }
+}
+
+function extractTrailingJsonObject(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  // openclaw sometimes prints warnings before JSON; parse from last JSON object.
+  const idx = text.lastIndexOf('\n{');
+  const candidate = idx >= 0 ? text.slice(idx + 1) : text;
+  const parsed = safeJsonParse(candidate, null);
+  if (parsed && typeof parsed === 'object') return parsed;
+  // fallback: try from first "{"
+  const first = text.indexOf('{');
+  if (first >= 0) {
+    return safeJsonParse(text.slice(first), null);
+  }
+  return null;
+}
+
+function dockerIsRunning(name) {
+  const out = run(`${DOCKER_BIN} inspect -f '{{.State.Running}}' ${name}`);
+  return out === 'true';
+}
+
 async function httpProbe(url) {
   try {
     const controller = new AbortController();
@@ -166,8 +244,8 @@ async function getHomeAssistantLogTail(limit = 120) {
 async function getCronJobs(cfg) {
   const token = cfg?.gateway?.auth?.token;
   if (!token) return { ok: false, error: 'token no disponible', jobs: [] };
-
-  const raw = run(`openclaw cron list --url ${GATEWAY_URL} --token ${token} --json`);
+  const gatewayUrl = resolveGatewayUrl(cfg);
+  const raw = run(`openclaw cron list --url ${gatewayUrl} --token ${token} --json`);
   if (isErr(raw)) {
     return { ok: false, error: raw.replace('__ERR__ ', ''), jobs: [] };
   }
@@ -220,6 +298,72 @@ async function readLastLines(file, maxLines = 1200) {
   }
 }
 
+async function readUsageResetState() {
+  try {
+    if (!fs.existsSync(USAGE_RESET_STATE_PATH)) return { resetAtMs: null, resetAtIso: null };
+    const raw = await fsp.readFile(USAGE_RESET_STATE_PATH, 'utf8');
+    const parsed = safeJsonParse(raw, {});
+    const resetAtMs = n(parsed?.resetAtMs) || null;
+    return {
+      resetAtMs,
+      resetAtIso: resetAtMs ? new Date(resetAtMs).toISOString() : null,
+      openrouterTotalCreditsAtResetUsd: n(parsed?.openrouterTotalCreditsAtResetUsd) || null,
+      openrouterTotalUsageAtResetUsd: n(parsed?.openrouterTotalUsageAtResetUsd) || null,
+      openrouterRemainingAtResetUsd: n(parsed?.openrouterRemainingAtResetUsd) || null,
+      openrouterSnapshotAtMs: n(parsed?.openrouterSnapshotAtMs) || null,
+    };
+  } catch {
+    return { resetAtMs: null, resetAtIso: null };
+  }
+}
+
+async function writeUsageResetState(resetAtMs = Date.now(), snapshot = null) {
+  const totalCredits = n(snapshot?.totalCreditsUsd);
+  const totalUsage = n(snapshot?.totalUsageUsd);
+  const remaining = n(snapshot?.remainingUsd);
+  const payload = {
+    resetAtMs,
+    resetAtIso: new Date(resetAtMs).toISOString(),
+    updatedAtMs: Date.now(),
+    openrouterTotalCreditsAtResetUsd: totalCredits > 0 ? totalCredits : null,
+    openrouterTotalUsageAtResetUsd: totalUsage > 0 ? totalUsage : null,
+    openrouterRemainingAtResetUsd: (totalCredits > 0 || totalUsage > 0) ? remaining : null,
+    openrouterSnapshotAtMs: (totalCredits > 0 || totalUsage > 0) ? Date.now() : null,
+  };
+  await fsp.writeFile(USAGE_RESET_STATE_PATH, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  return payload;
+}
+
+async function fetchOpenRouterCredits(cfg) {
+  const apiKey = String(cfg?.models?.providers?.openrouter?.apiKey || '').trim();
+  if (!apiKey || apiKey === 'OPENROUTER_API_KEY') {
+    return { ok: false, reason: 'apiKey no configurada' };
+  }
+  try {
+    const res = await fetch(OPENROUTER_CREDITS_URL, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+    });
+    if (!res.ok) {
+      return { ok: false, reason: `HTTP ${res.status}` };
+    }
+    const payload = await res.json().catch(() => null);
+    const totalCreditsUsd = n(payload?.data?.total_credits);
+    const totalUsageUsd = n(payload?.data?.total_usage);
+    const remainingUsd = Math.max(0, totalCreditsUsd - totalUsageUsd);
+    return {
+      ok: true,
+      totalCreditsUsd,
+      totalUsageUsd,
+      remainingUsd,
+      fetchedAtMs: Date.now(),
+    };
+  } catch (err) {
+    return { ok: false, reason: String(err?.message || err || 'error desconocido') };
+  }
+}
+
 function normalizeModelKey(provider, model) {
   const p = String(provider || '').trim();
   const m = String(model || '').trim();
@@ -240,9 +384,12 @@ function estimateCostUsd(modelKey, usage) {
   );
 }
 
-async function collectUsageStats() {
+async function collectUsageStats(cfg) {
   const now = Date.now();
-  const minTs = now - USAGE_LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
+  const lookbackMinTs = now - USAGE_LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
+  const resetState = await readUsageResetState();
+  const openrouterCredits = await fetchOpenRouterCredits(cfg);
+  const minTs = Math.max(lookbackMinTs, n(resetState.resetAtMs));
   const usageByModel = new Map();
   // daily[YYYY-MM-DD][modelKey] = { calls, input, output, cacheRead, cacheWrite, total }
   const daily = {};
@@ -274,7 +421,16 @@ async function collectUsageStats() {
 
       // aggregate totals
       if (!usageByModel.has(key)) {
-        usageByModel.set(key, { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
+        usageByModel.set(key, {
+          calls: 0,
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+          costUsdReported: 0,
+          providerCounts: {},
+        });
       }
       const acc = usageByModel.get(key);
       acc.calls += 1;
@@ -283,6 +439,9 @@ async function collectUsageStats() {
       acc.cacheRead += n(usage.cacheRead || usage.cache_read_tokens);
       acc.cacheWrite += n(usage.cacheWrite || usage.cache_write_tokens);
       acc.total = acc.input + acc.output + acc.cacheRead + acc.cacheWrite;
+      acc.costUsdReported += n(usage?.cost?.total || usage?.costUsd || usage?.cost_usd);
+      const providerKey = String(provider || 'unknown').toLowerCase();
+      acc.providerCounts[providerKey] = n(acc.providerCounts[providerKey]) + 1;
 
       // daily breakdown
       const day = ts
@@ -299,16 +458,23 @@ async function collectUsageStats() {
 
   const models = Array.from(usageByModel.entries()).map(([model, usage]) => {
     const isLocal = isLocalModel(model);
-    const usd = isLocal ? 0 : estimateCostUsd(model, usage);
+    const reportedUsd = n(usage.costUsdReported);
+    const estimatedUsd = isLocal ? 0 : estimateCostUsd(model, usage);
+    const usd = reportedUsd > 0 ? reportedUsd : estimatedUsd;
+    const openrouterModel = n(usage?.providerCounts?.openrouter) > 0;
     const eqUsd = isLocal ? equivalentCloudCostUsd(usage) : 0;
     return {
       model,
       usage,
+      reportedCostUsd: reportedUsd,
+      estimatedCostUsd: estimatedUsd,
+      costSource: reportedUsd > 0 ? 'reported' : 'estimated',
       costUsd: usd,
       costClp: usd * USD_CLP_RATE,
       equivalentCostUsd: eqUsd,
       equivalentCostClp: eqUsd * USD_CLP_RATE,
       localEstimatedFree: isLocal,
+      openrouterModel,
     };
   });
 
@@ -325,19 +491,101 @@ async function collectUsageStats() {
       acc.equivalentCostClp += m.equivalentCostClp;
       acc.savedUsd += m.localEstimatedFree ? m.equivalentCostUsd : 0;
       acc.savedClp += m.localEstimatedFree ? m.equivalentCostClp : 0;
+      acc.openrouterSpentUsd += m.openrouterModel ? m.costUsd : 0;
       return acc;
     },
     { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0,
       costUsd: 0, costClp: 0, equivalentCostUsd: 0, equivalentCostClp: 0,
-      savedUsd: 0, savedClp: 0 },
+      savedUsd: 0, savedClp: 0, openrouterSpentUsd: 0 },
   );
+
+  // Add external spend produced by standalone jobs (outside OpenClaw session logs).
+  let externalOpenrouterSpentUsd = 0;
+  try {
+    if (fs.existsSync(EXTERNAL_COST_LEDGER)) {
+      const raw = await fsp.readFile(EXTERNAL_COST_LEDGER, 'utf8');
+      const lines = raw.split('\n').filter(Boolean);
+      for (const line of lines) {
+        const row = safeJsonParse(line, null);
+        if (!row || typeof row !== 'object') continue;
+        const ts = n(row.ts);
+        if (ts && ts < minTs) continue;
+        const provider = String(row.provider || '').toLowerCase();
+        if (provider !== 'openrouter') continue;
+        externalOpenrouterSpentUsd += n(row.costUsd);
+      }
+    }
+  } catch {}
+
+  totals.openrouterSpentUsd += externalOpenrouterSpentUsd;
+  totals.costUsd += externalOpenrouterSpentUsd;
+  totals.costClp += externalOpenrouterSpentUsd * USD_CLP_RATE;
+
+  const openrouterModels = models.filter((m) => m.openrouterModel);
+  const openrouterTotals = openrouterModels.reduce(
+    (acc, m) => {
+      acc.calls += n(m.usage.calls);
+      acc.input += n(m.usage.input);
+      acc.output += n(m.usage.output);
+      acc.totalTokens += n(m.usage.total);
+      acc.costUsd += n(m.costUsd);
+      acc.costClp += n(m.costClp);
+      return acc;
+    },
+    { calls: 0, input: 0, output: 0, totalTokens: 0, costUsd: 0, costClp: 0 },
+  );
+  openrouterTotals.costUsd += externalOpenrouterSpentUsd;
+  openrouterTotals.costClp += externalOpenrouterSpentUsd * USD_CLP_RATE;
+
+  const openrouterApiSinceResetUsd = (
+    openrouterCredits.ok &&
+    resetState.openrouterTotalUsageAtResetUsd != null
+  )
+    ? Math.max(0, n(openrouterCredits.totalUsageUsd) - n(resetState.openrouterTotalUsageAtResetUsd))
+    : null;
+
+  const openrouterBudgetUsd = openrouterCredits.ok
+    ? n(openrouterCredits.totalCreditsUsd)
+    : OPENROUTER_BUDGET_USD;
+  const openrouterUsdSpent = openrouterApiSinceResetUsd != null
+    ? openrouterApiSinceResetUsd
+    : (openrouterCredits.ok ? n(openrouterCredits.totalUsageUsd) : totals.openrouterSpentUsd);
+  const openrouterRemaining = openrouterCredits.ok
+    ? n(openrouterCredits.remainingUsd)
+    : Math.max(0, openrouterBudgetUsd - openrouterUsdSpent);
+  const openrouterUsedPct = openrouterBudgetUsd > 0
+    ? Math.min(100, (openrouterUsdSpent / openrouterBudgetUsd) * 100)
+    : 0;
 
   return {
     lookbackDays: USAGE_LOOKBACK_DAYS,
+    windowStartAtMs: minTs,
+    windowStartAtIso: new Date(minTs).toISOString(),
+    resetAtMs: resetState.resetAtMs,
+    resetAtIso: resetState.resetAtIso,
     usdClpRate: USD_CLP_RATE,
+    openrouterBudgetUsd,
     cloudEquivalentRef: 'GPT-4o-mini ($0.15/$0.60 por 1M tokens)',
     models: models.sort((a, b) => b.usage.total - a.usage.total),
     totals,
+    budget: {
+      openrouterUsdBudget: openrouterBudgetUsd,
+      openrouterUsdSpent,
+      openrouterUsdRemaining: openrouterRemaining,
+      openrouterUsedPct: openrouterUsedPct,
+      externalLedgerUsd: externalOpenrouterSpentUsd,
+      openrouterSpendSource: openrouterApiSinceResetUsd != null
+        ? 'openrouter_api_reset_window'
+        : (openrouterCredits.ok ? 'openrouter_api_total' : 'logs_estimate'),
+      openrouterLogsWindowUsd: totals.openrouterSpentUsd,
+      openrouterApiSinceResetUsd,
+    },
+    openrouter: {
+      models: openrouterModels.sort((a, b) => b.costUsd - a.costUsd),
+      totals: openrouterTotals,
+    },
+    openrouterCredits,
+    resetState,
     daily,
   };
 }
@@ -462,7 +710,7 @@ function staticFile(res, relPath, contentType = 'text/plain; charset=utf-8') {
 }
 
 function toDashboardHttp(wsUrl) {
-  if (!wsUrl) return 'http://127.0.0.1:18789/';
+  if (!wsUrl) return 'http://127.0.0.1:18889/';
   return wsUrl.replace(/^ws:/, 'http:').replace(/^wss:/, 'https:').replace(/\/?$/, '/');
 }
 
@@ -472,14 +720,137 @@ function portFromGatewayUrl(wsUrl) {
     if (u.port) return Number(u.port);
     return u.protocol === 'wss:' ? 443 : 80;
   } catch {
-    return 18789;
+    return 18889;
   }
+}
+
+function resolveGatewayUrl(cfg) {
+  if (ENV_GATEWAY_URL) return ENV_GATEWAY_URL;
+  const port = Number(cfg?.gateway?.port || 18889);
+  return `ws://127.0.0.1:${port}`;
+}
+
+function readHaTokenFromSecrets() {
+  try {
+    if (!fs.existsSync(HA_SECRETS_ENV_PATH)) return '';
+    const raw = fs.readFileSync(HA_SECRETS_ENV_PATH, 'utf8');
+    const line = raw.split('\n').find((l) => /^\s*HA_TOKEN=/.test(l));
+    if (!line) return '';
+    const value = line.replace(/^\s*HA_TOKEN=/, '').trim();
+    return value.replace(/^['"]|['"]$/g, '');
+  } catch {
+    return '';
+  }
+}
+
+function getHaToken() {
+  return String(process.env.HA_TOKEN || readHaTokenFromSecrets() || '').trim();
+}
+
+async function haApi(pathname, opts = {}) {
+  const token = getHaToken();
+  if (!token) return { ok: false, status: 0, error: 'HA_TOKEN no configurado' };
+  const url = `${HA_URL}${pathname}`;
+  try {
+    const res = await fetch(url, {
+      method: opts.method || 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        ...(opts.headers || {}),
+      },
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    const text = await res.text();
+    const json = safeJsonParse(text, null);
+    if (!res.ok) {
+      return { ok: false, status: res.status, error: (json?.message || text || `HTTP ${res.status}`).slice(0, 300) };
+    }
+    return { ok: true, status: res.status, data: json };
+  } catch (err) {
+    return { ok: false, status: 0, error: String(err?.message || err || 'error HA') };
+  }
+}
+
+async function collectAppleStatus() {
+  const statesRes = await haApi('/api/states');
+  if (!statesRes.ok) {
+    return {
+      ok: false,
+      error: statesRes.error || 'No se pudo leer estados HA',
+      devices: [],
+      metrics: [],
+      notifyTargets: [],
+    };
+  }
+  const servicesRes = await haApi('/api/services');
+  const states = Array.isArray(statesRes.data) ? statesRes.data : [];
+  const services = Array.isArray(servicesRes?.data) ? servicesRes.data : [];
+
+  const appleHint = /(iphone|ipad|watch|apple|macbook|airpods|ios)/i;
+  const trackers = states.filter((s) => String(s?.entity_id || '').startsWith('device_tracker.'));
+  const sensors = states.filter((s) => String(s?.entity_id || '').startsWith('sensor.'));
+
+  const devices = trackers
+    .filter((s) => {
+      const eid = String(s.entity_id || '');
+      const fn = String(s.attributes?.friendly_name || '');
+      const vendor = String(s.attributes?.manufacturer || '');
+      return appleHint.test(eid) || appleHint.test(fn) || /apple/i.test(vendor);
+    })
+    .map((s) => {
+      const lat = n(s.attributes?.latitude);
+      const lon = n(s.attributes?.longitude);
+      const hasCoords = Number.isFinite(lat) && Number.isFinite(lon) && (lat !== 0 || lon !== 0);
+      return {
+        entityId: s.entity_id,
+        name: s.attributes?.friendly_name || s.entity_id,
+        state: s.state || 'unknown',
+        battery: s.attributes?.battery_level ?? null,
+        latitude: hasCoords ? lat : null,
+        longitude: hasCoords ? lon : null,
+        gpsAccuracy: s.attributes?.gps_accuracy ?? null,
+        lastUpdated: s.last_updated || null,
+      };
+    });
+
+  const metrics = sensors
+    .filter((s) => {
+      const eid = String(s.entity_id || '');
+      const fn = String(s.attributes?.friendly_name || '');
+      return appleHint.test(eid) || appleHint.test(fn);
+    })
+    .filter((s) => !['unknown', 'unavailable', 'none'].includes(String(s.state || '').toLowerCase()))
+    .slice(0, 80)
+    .map((s) => ({
+      entityId: s.entity_id,
+      name: s.attributes?.friendly_name || s.entity_id,
+      state: s.state,
+      unit: s.attributes?.unit_of_measurement || '',
+      deviceClass: s.attributes?.device_class || '',
+      lastUpdated: s.last_updated || null,
+    }));
+
+  const notifyTargets = services
+    .filter((d) => d?.domain === 'notify')
+    .flatMap((d) => Array.isArray(d.services) ? Object.keys(d.services).map((svc) => ({ domain: 'notify', service: svc })) : [])
+    .filter((s) => /(mobile_app|iphone|ipad|watch|ios|apple)/i.test(s.service))
+    .map((s) => ({ id: `${s.domain}.${s.service}`, service: s.service }));
+
+  return {
+    ok: true,
+    devices,
+    metrics,
+    notifyTargets,
+    mapCenter: devices.find((d) => d.latitude != null && d.longitude != null) || null,
+  };
 }
 
 async function buildStatus() {
   const cfg = await readOpenClawConfig();
-  const configuredPort = Number(cfg?.gateway?.port || 18789);
-  const runtimePort = portFromGatewayUrl(GATEWAY_URL);
+  const gatewayUrl = resolveGatewayUrl(cfg);
+  const configuredPort = Number(cfg?.gateway?.port || 18889);
+  const runtimePort = portFromGatewayUrl(gatewayUrl);
   const openclawListening = await checkPort('127.0.0.1', runtimePort);
   const haListening = await checkPort('127.0.0.1', 8123);
   const haProbe = await httpProbe(HA_URL);
@@ -487,9 +858,10 @@ async function buildStatus() {
   const openclawLogs = await getOpenClawLogTail(180);
   const haLogs = await getHomeAssistantLogTail(120);
   const cron = await getCronJobs(cfg);
-  const usageStats = await collectUsageStats();
+  const usageStats = await collectUsageStats(cfg);
   const projectStats = await collectProjectStats();
   const lastActivity = await collectLastActivity();
+  const apple = await collectAppleStatus();
 
   const errCount = openclawLogs.filter((l) => /\berror\b|failed|unauthorized|timeout/i.test(l)).length;
   const telegramEvents = openclawLogs.filter((l) => /telegram/i.test(l)).slice(-10);
@@ -503,13 +875,40 @@ async function buildStatus() {
         ? 'noche/local (ollama)'
         : 'custom';
 
+  const services = {
+    openclaw: {
+      id: 'openclaw',
+      label: 'OpenClaw Gateway',
+      running: openclawListening,
+      detail: `127.0.0.1:${runtimePort}`,
+    },
+    telegram: {
+      id: 'telegram',
+      label: 'Telegram',
+      running: Boolean(cfg?.channels?.telegram?.enabled && cfg?.channels?.telegram?.botToken),
+      detail: cfg?.channels?.telegram?.name || 'bot no configurado',
+    },
+    homeassistant: {
+      id: 'homeassistant',
+      label: 'Home Assistant',
+      running: dockerIsRunning('homeassistant'),
+      detail: 'docker:homeassistant',
+    },
+    n8n: {
+      id: 'n8n',
+      label: 'n8n',
+      running: dockerIsRunning('n8n'),
+      detail: 'docker:n8n',
+    },
+  };
+
   return {
     nowIso: new Date().toISOString(),
     uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
     openclaw: {
       configPath: OPENCLAW_CONFIG,
-      gatewayUrl: GATEWAY_URL,
-      dashboardUrl: toDashboardHttp(GATEWAY_URL),
+      gatewayUrl,
+      dashboardUrl: toDashboardHttp(gatewayUrl),
       port: runtimePort,
       configuredPort,
       listening: openclawListening,
@@ -535,10 +934,73 @@ async function buildStatus() {
     usage: usageStats,
     projects: projectStats,
     lastActivity,
+    apple,
+    services,
     logs: {
       openclaw: openclawLogs.slice(-120),
       homeassistant: haLogs.slice(-120),
     },
+  };
+}
+
+async function readJsonBody(req) {
+  const chunks = [];
+  for await (const chunk of req) {
+    chunks.push(chunk);
+  }
+  if (!chunks.length) return {};
+  const raw = Buffer.concat(chunks).toString('utf8');
+  return safeJsonParse(raw, {});
+}
+
+async function performServiceAction(service, action, cfg) {
+  const allowedServices = new Set(['openclaw', 'homeassistant', 'n8n']);
+  const allowedActions = new Set(['start', 'stop', 'restart']);
+  if (!allowedServices.has(service)) {
+    return { ok: false, message: `Servicio inválido: ${service}` };
+  }
+  if (!allowedActions.has(action)) {
+    return { ok: false, message: `Acción inválida: ${action}` };
+  }
+
+  if (service === 'openclaw') {
+    const gatewayUrl = resolveGatewayUrl(cfg);
+    const port = portFromGatewayUrl(gatewayUrl);
+    if (action === 'stop' || action === 'restart') {
+      runShell('pkill -9 -f openclaw-gateway || true');
+    }
+    if (action === 'start' || action === 'restart') {
+      const startCmd =
+        `nohup "${OPENCLAW_BIN}" gateway run --bind loopback --port ${port} --force > /tmp/openclaw-gateway.log 2>&1 &`;
+      const started = runShell(startCmd);
+      if (!started.ok) {
+        return { ok: false, message: `No se pudo iniciar OpenClaw:\n${started.output}` };
+      }
+    }
+    let running = false;
+    for (let i = 0; i < 10; i += 1) {
+      running = await checkPort('127.0.0.1', port);
+      if (running) break;
+      await new Promise((r) => setTimeout(r, 600));
+    }
+    return {
+      ok: true,
+      message: `OpenClaw ${action} ejecutado`,
+      running,
+    };
+  }
+
+  const container = service;
+  const result = runShell(`${DOCKER_BIN} ${action} ${container}`);
+  if (!result.ok) {
+    return { ok: false, message: result.output || `Fallo docker ${action} ${container}` };
+  }
+  await new Promise((r) => setTimeout(r, 800));
+  const running = dockerIsRunning(container);
+  return {
+    ok: true,
+    message: `${container} ${action} ejecutado`,
+    running,
   };
 }
 
@@ -549,6 +1011,49 @@ const server = http.createServer(async (req, res) => {
     const payload = await buildStatus();
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify(payload));
+    return;
+  }
+
+  if (u.pathname === '/api/gateway-auth') {
+    const cfg = await readOpenClawConfig();
+    const gatewayUrl = resolveGatewayUrl(cfg);
+    const token = String(cfg?.gateway?.auth?.token || '').trim();
+    if (!token) {
+      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ ok: false, message: 'Token de gateway no configurado' }));
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ ok: true, gatewayUrl, token }));
+    return;
+  }
+
+  if (u.pathname === '/api/update-status') {
+    const currentVersionRaw = run(`"${OPENCLAW_BIN}" --version`);
+    const currentVersion = isErr(currentVersionRaw) ? '' : String(currentVersionRaw || '').trim();
+    const out = runShell(`"${OPENCLAW_BIN}" update status --json`, 20000);
+    if (!out.ok) {
+      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ ok: false, message: 'No se pudo consultar update status' }));
+      return;
+    }
+    const parsed = extractTrailingJsonObject(out.output);
+    if (!parsed) {
+      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ ok: false, message: 'Salida no parseable de update status' }));
+      return;
+    }
+    const installed = String(currentVersion || parsed?.update?.currentVersion || '').trim();
+    const latest = String(parsed?.availability?.latestVersion || parsed?.update?.registry?.latestVersion || '').trim();
+    const available = Boolean(parsed?.availability?.available);
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({
+      ok: true,
+      available,
+      installed: installed || (available ? '' : latest),
+      latest: latest || installed,
+      channel: parsed?.channel?.label || 'stable',
+    }));
     return;
   }
 
@@ -563,6 +1068,62 @@ const server = http.createServer(async (req, res) => {
     const data = await getHomeAssistantLogTail(300);
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ lines: data }));
+    return;
+  }
+
+  if (u.pathname === '/api/service-action' && req.method === 'POST') {
+    const cfg = await readOpenClawConfig();
+    const body = await readJsonBody(req);
+    const service = String(body?.service || '').trim();
+    const action = String(body?.action || '').trim();
+    const out = await performServiceAction(service, action, cfg);
+    const statusCode = out.ok ? 200 : 400;
+    res.writeHead(statusCode, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    res.end(JSON.stringify(out));
+    return;
+  }
+
+  if (u.pathname === '/api/usage/reset' && req.method === 'POST') {
+    const cfg = await readOpenClawConfig();
+    const snapshot = await fetchOpenRouterCredits(cfg);
+    const payload = await writeUsageResetState(Date.now(), snapshot.ok ? snapshot : null);
+    res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    res.end(JSON.stringify({ ok: true, ...payload, openrouterSnapshot: snapshot }));
+    return;
+  }
+
+  if (u.pathname === '/api/apple/notify' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const target = String(body?.target || '').trim();
+    const message = String(body?.message || '').trim();
+    if (!/^notify\.[a-zA-Z0-9_]+$/.test(target)) {
+      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, message: 'Target inválido. Ejemplo: notify.mobile_app_iphone' }));
+      return;
+    }
+    if (!message) {
+      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, message: 'Mensaje vacío' }));
+      return;
+    }
+    const service = target.split('.')[1];
+    const out = await haApi(`/api/services/notify/${service}`, {
+      method: 'POST',
+      body: { message },
+    });
+    if (!out.ok) {
+      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, message: out.error || 'No se pudo enviar' }));
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: true, message: `Enviado a ${target}` }));
     return;
   }
 

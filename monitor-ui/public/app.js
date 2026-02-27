@@ -12,6 +12,10 @@ function fmtMoney(n, currency = 'USD') {
     maximumFractionDigits: currency === 'CLP' ? 0 : 4,
   }).format(Number(n || 0));
 }
+function fmtMaybeMoney(value, currency = 'USD') {
+  const num = Number(value);
+  return Number.isFinite(num) ? fmtMoney(num, currency) : '—';
+}
 function setText(id, text) {
   const el = document.getElementById(id);
   if (el) el.textContent = text;
@@ -275,6 +279,67 @@ function renderModel(data) {
   if (openDash) openDash.href = data.openclaw.dashboardUrl;
 }
 
+async function callServiceAction(service, action) {
+  const res = await fetch('/api/service-action', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ service, action }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data?.ok) {
+    const err = data?.message || `Fallo en ${service} ${action}`;
+    throw new Error(err);
+  }
+  return data;
+}
+
+function renderServiceControls(data) {
+  const root = document.getElementById('serviceControls');
+  if (!root) return;
+  const services = data.services || {};
+  const ordered = ['openclaw', 'homeassistant', 'n8n']
+    .map((id) => services[id])
+    .filter(Boolean);
+
+  root.innerHTML = ordered.map((s) => `
+    <div class="svc-card" data-service="${s.id}">
+      <div class="svc-head">
+        <div class="svc-title">${s.label}</div>
+        <span class="svc-state ${s.running ? 'on' : 'off'}">${s.running ? 'ACTIVO' : 'CAIDO'}</span>
+      </div>
+      <div class="svc-detail">${s.detail || ''}</div>
+      <div class="svc-actions">
+        <button class="svc-btn start" data-action="start">Iniciar</button>
+        <button class="svc-btn restart" data-action="restart">Reiniciar</button>
+        <button class="svc-btn stop" data-action="stop">Detener</button>
+      </div>
+      <div class="svc-feedback" id="svc-msg-${s.id}"></div>
+    </div>
+  `).join('');
+
+  root.querySelectorAll('.svc-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const card = btn.closest('.svc-card');
+      if (!card) return;
+      const service = card.dataset.service;
+      const action = btn.dataset.action;
+      const msg = document.getElementById(`svc-msg-${service}`);
+      const buttons = card.querySelectorAll('.svc-btn');
+      buttons.forEach((b) => { b.disabled = true; });
+      if (msg) msg.textContent = `Ejecutando ${action}...`;
+      try {
+        const out = await callServiceAction(service, action);
+        if (msg) msg.textContent = out.message || 'OK';
+        await load();
+      } catch (e) {
+        if (msg) msg.textContent = `Error: ${String(e.message || e)}`;
+      } finally {
+        buttons.forEach((b) => { b.disabled = false; });
+      }
+    });
+  });
+}
+
 function renderJobs(data) {
   const tbody = document.getElementById('jobs');
   const rows = (data.activity.cronJobs || []).sort((a, b) => String(a.name).localeCompare(String(b.name)));
@@ -295,7 +360,15 @@ function renderJobs(data) {
 function renderUsage(data) {
   const usage = data.usage || {};
   const totals = usage.totals || {};
+  const budget = usage.budget || {};
+  const credits = usage.openrouterCredits || {};
+  const spendSource = budget.openrouterSpendSource === 'openrouter_api_reset_window'
+    ? 'OpenRouter API (desde reset)'
+    : budget.openrouterSpendSource === 'openrouter_api_total'
+      ? 'OpenRouter API (total cuenta)'
+      : 'logs + ledger (estimado)';
   const summary = document.getElementById('usageSummary');
+  const resetInfo = document.getElementById('usageResetInfo');
   summary.innerHTML = [
     { label: `Tokens total (${usage.lookbackDays || 7}d)`, value: fmtNum(totals.total), className: 'ok' },
     { label: 'Input tokens', value: fmtNum(totals.input), className: 'info' },
@@ -304,14 +377,24 @@ function renderUsage(data) {
     { label: 'Costo real CLP', value: fmtMoney(totals.costClp, 'CLP'), className: totals.costClp > 500 ? 'warn' : 'ok' },
     { label: '☁️ Equiv. cloud USD', value: fmtMoney((totals.costUsd || 0) + (totals.equivalentCostUsd || 0), 'USD'), className: 'warn' },
     { label: '💰 Ahorro USD (local)', value: fmtMoney(totals.savedUsd || 0, 'USD'), className: 'ok' },
+    { label: `OpenRouter usado (${(budget.openrouterUsedPct || 0).toFixed(1)}%)`, value: `${fmtMoney(budget.openrouterUsdSpent || 0, 'USD')} / ${fmtMoney(budget.openrouterUsdBudget || 0, 'USD')}`, className: (budget.openrouterUsedPct || 0) > 80 ? 'bad' : ((budget.openrouterUsedPct || 0) > 60 ? 'warn' : 'ok') },
+    { label: 'OpenRouter restante (crédito)', value: credits.ok ? fmtMoney(credits.remainingUsd || 0, 'USD') : fmtMoney(budget.openrouterUsdRemaining || 0, 'USD'), className: (budget.openrouterUsdRemaining || 0) < 2 ? 'warn' : 'ok' },
+    { label: 'Fuente de gasto OpenRouter', value: spendSource, className: 'info' },
   ].map((k) =>
     `<div class="kpi"><div class="label">${k.label}</div><div class="value ${k.className}">${k.value}</div></div>`
   ).join('');
+  if (resetInfo) {
+    if (usage.resetAtMs) {
+      resetInfo.textContent = `Contadores reseteados el ${fmtDate(usage.resetAtMs)} · ventana activa desde ${fmtDate(usage.windowStartAtMs)}`;
+    } else {
+      resetInfo.textContent = `Sin reset manual activo · ventana activa desde ${fmtDate(usage.windowStartAtMs)}`;
+    }
+  }
 
   const tbody = document.getElementById('usageModels');
   const rows = usage.models || [];
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="9" style="color:var(--text2)">Sin datos de uso todavía.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="color:var(--text2)">Sin datos de uso todavía.</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map((r) => {
@@ -328,6 +411,9 @@ function renderUsage(data) {
     const eqCostClp = r.localEstimatedFree
       ? `<span style="color:var(--yellow)">${fmtMoney(r.equivalentCostClp, 'CLP')}</span>`
       : `<span style="color:var(--text2)">—</span>`;
+    const sourceLabel = r.costSource === 'reported'
+      ? '<span style="color:var(--green)">reportado API</span>'
+      : '<span style="color:var(--yellow)">estimado</span>';
     return `<tr>
       <td><span class="model-badge ${badge}">${r.model.split('/').pop()}</span>
         ${r.localEstimatedFree ? ' <span style="font-size:10px;color:var(--green)">● local</span>' : ''}</td>
@@ -339,6 +425,59 @@ function renderUsage(data) {
       <td>${realCostClp}</td>
       <td>${eqCost}</td>
       <td>${eqCostClp}</td>
+      <td>${sourceLabel}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderOpenRouter(data) {
+  const usage = data.usage || {};
+  const orUsage = usage.openrouter || {};
+  const totals = orUsage.totals || {};
+  const budget = usage.budget || {};
+  const credits = usage.openrouterCredits || {};
+  const spendSource = budget.openrouterSpendSource === 'openrouter_api_reset_window'
+    ? 'OpenRouter API (desde reset)'
+    : budget.openrouterSpendSource === 'openrouter_api_total'
+      ? 'OpenRouter API (total cuenta)'
+      : 'Logs/Ledger';
+  const summary = document.getElementById('openrouterSummary');
+  if (summary) {
+    summary.innerHTML = [
+      { label: 'OpenRouter calls', value: fmtNum(totals.calls), className: 'info' },
+      { label: 'Tokens OpenRouter', value: fmtNum(totals.totalTokens), className: 'ok' },
+      { label: 'Crédito total OpenRouter', value: fmtMaybeMoney(credits.totalCreditsUsd, 'USD'), className: 'info' },
+      { label: 'Crédito restante OpenRouter', value: fmtMaybeMoney(credits.remainingUsd, 'USD'), className: (Number(credits.remainingUsd) < 2 ? 'warn' : 'ok') },
+      { label: 'Gasto total API OpenRouter', value: fmtMaybeMoney(credits.totalUsageUsd, 'USD'), className: 'warn' },
+      { label: 'Gasto OpenRouter desde reset', value: fmtMoney(budget.openrouterUsdSpent || 0, 'USD'), className: (budget.openrouterUsedPct || 0) > 80 ? 'bad' : 'ok' },
+      { label: 'Gasto OpenRouter por logs', value: fmtMoney(budget.openrouterLogsWindowUsd || totals.costUsd || 0, 'USD'), className: 'info' },
+      { label: 'Fuente de gasto', value: spendSource, className: 'info' },
+      { label: 'Ledger externo', value: fmtMoney(budget.externalLedgerUsd || 0, 'USD'), className: 'info' },
+    ].map((k) =>
+      `<div class="kpi"><div class="label">${k.label}</div><div class="value ${k.className}">${k.value}</div></div>`
+    ).join('');
+  }
+
+  const tbody = document.getElementById('openrouterModels');
+  if (!tbody) return;
+  const rows = orUsage.models || [];
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="color:var(--text2)">Sin uso OpenRouter en la ventana actual.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map((r) => {
+    const sourceLabel = r.costSource === 'reported'
+      ? '<span style="color:var(--green)">reportado API</span>'
+      : '<span style="color:var(--yellow)">estimado</span>';
+    return `<tr>
+      <td><span class="model-badge model-other">${r.model.split('/').pop()}</span></td>
+      <td>${fmtNum(r.usage.calls)}</td>
+      <td>${fmtNum(r.usage.input)}</td>
+      <td>${fmtNum(r.usage.output)}</td>
+      <td>${fmtNum(r.usage.total)}</td>
+      <td>${fmtMoney(r.costUsd, 'USD')}</td>
+      <td>${fmtMoney(r.costClp, 'CLP')}</td>
+      <td>${sourceLabel}</td>
     </tr>`;
   }).join('');
 }
@@ -414,6 +553,112 @@ function renderProjects(data) {
   }).join('');
 }
 
+function renderApple(data) {
+  const apple = data.apple || {};
+  const summary = document.getElementById('appleSummary');
+  const devices = Array.isArray(apple.devices) ? apple.devices : [];
+  const metrics = Array.isArray(apple.metrics) ? apple.metrics : [];
+  const notifyTargets = Array.isArray(apple.notifyTargets) ? apple.notifyTargets : [];
+  const mapHint = document.getElementById('appleMapHint');
+
+  if (summary) {
+    summary.innerHTML = [
+      { label: 'Apple devices detectados', value: fmtNum(devices.length), className: devices.length ? 'ok' : 'warn' },
+      { label: 'Sensores Apple', value: fmtNum(metrics.length), className: metrics.length ? 'ok' : 'warn' },
+      { label: 'Canales notify disponibles', value: fmtNum(notifyTargets.length), className: notifyTargets.length ? 'ok' : 'warn' },
+      { label: 'Estado integración', value: apple.ok ? 'Conectado' : `Error: ${apple.error || 'sin token'}`, className: apple.ok ? 'ok' : 'bad' },
+    ].map((k) =>
+      `<div class="kpi"><div class="label">${k.label}</div><div class="value ${k.className}">${k.value}</div></div>`
+    ).join('');
+  }
+
+  if (mapHint) {
+    if (apple.mapCenter && Number.isFinite(Number(apple.mapCenter.latitude)) && Number.isFinite(Number(apple.mapCenter.longitude))) {
+      const lat = Number(apple.mapCenter.latitude).toFixed(6);
+      const lon = Number(apple.mapCenter.longitude).toFixed(6);
+      mapHint.innerHTML = `Centro de mapa sugerido: <code>${lat},${lon}</code> · <a target="_blank" rel="noreferrer" href="https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=16/${lat}/${lon}">Abrir mapa</a>`;
+    } else {
+      mapHint.textContent = 'Sin coordenadas GPS disponibles (revisa permisos de ubicación en app Home Assistant Companion).';
+    }
+  }
+
+  const deviceBody = document.getElementById('appleDevices');
+  if (deviceBody) {
+    if (!devices.length) {
+      deviceBody.innerHTML = '<tr><td colspan="6" style="color:var(--text2)">Sin dispositivos Apple detectados en device_tracker.</td></tr>';
+    } else {
+      deviceBody.innerHTML = devices.map((d) => {
+        const hasGps = Number.isFinite(Number(d.latitude)) && Number.isFinite(Number(d.longitude));
+        const gps = hasGps ? `${Number(d.latitude).toFixed(5)}, ${Number(d.longitude).toFixed(5)}` : '—';
+        const map = hasGps
+          ? `<a target="_blank" rel="noreferrer" href="https://www.openstreetmap.org/?mlat=${Number(d.latitude).toFixed(6)}&mlon=${Number(d.longitude).toFixed(6)}#map=16/${Number(d.latitude).toFixed(6)}/${Number(d.longitude).toFixed(6)}">Ver mapa</a>`
+          : '—';
+        const battery = d.battery != null ? `${d.battery}%` : '—';
+        return `<tr>
+          <td>${d.name}</td>
+          <td>${d.state || '-'}</td>
+          <td>${battery}</td>
+          <td>${gps}</td>
+          <td>${map}</td>
+          <td>${d.lastUpdated ? new Date(d.lastUpdated).toLocaleString('es-CL') : '-'}</td>
+        </tr>`;
+      }).join('');
+    }
+  }
+
+  const metricsBody = document.getElementById('appleMetrics');
+  if (metricsBody) {
+    if (!metrics.length) {
+      metricsBody.innerHTML = '<tr><td colspan="5" style="color:var(--text2)">Sin métricas Apple disponibles.</td></tr>';
+    } else {
+      metricsBody.innerHTML = metrics.slice(0, 40).map((m) => `<tr>
+        <td>${m.name}</td>
+        <td>${m.state ?? '-'}</td>
+        <td>${m.unit || '-'}</td>
+        <td>${m.deviceClass || '-'}</td>
+        <td>${m.lastUpdated ? new Date(m.lastUpdated).toLocaleString('es-CL') : '-'}</td>
+      </tr>`).join('');
+    }
+  }
+
+  const notifySelect = document.getElementById('appleNotifyTarget');
+  if (notifySelect) {
+    const prev = notifySelect.value;
+    const opts = notifyTargets.length
+      ? notifyTargets.map((t) => `<option value="${t.id}">${t.id}</option>`).join('')
+      : '<option value="">Sin canales notify.mobile_app</option>';
+    notifySelect.innerHTML = opts;
+    if (prev && [...notifySelect.options].some((o) => o.value === prev)) notifySelect.value = prev;
+  }
+}
+
+async function sendAppleNotify() {
+  const target = document.getElementById('appleNotifyTarget')?.value || '';
+  const message = document.getElementById('appleNotifyMessage')?.value?.trim() || '';
+  const statusEl = document.getElementById('appleNotifyStatus');
+  if (!target) {
+    if (statusEl) statusEl.textContent = 'No hay target notify seleccionado.';
+    return;
+  }
+  if (!message) {
+    if (statusEl) statusEl.textContent = 'Escribe un mensaje antes de enviar.';
+    return;
+  }
+  if (statusEl) statusEl.textContent = 'Enviando...';
+  try {
+    const res = await fetch('/api/apple/notify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target, message }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.ok) throw new Error(data?.message || 'Error enviando notify');
+    if (statusEl) statusEl.textContent = data.message || 'Mensaje enviado.';
+  } catch (e) {
+    if (statusEl) statusEl.textContent = `Error: ${String(e.message || e)}`;
+  }
+}
+
 // ── tabs ──────────────────────────────────────────────────────────────────────
 document.querySelectorAll('.tab').forEach((tab) => {
   tab.addEventListener('click', () => {
@@ -434,9 +679,12 @@ async function load() {
     renderSummary(data);
     renderConnections(data);
     renderModel(data);
+    renderServiceControls(data);
     renderJobs(data);
     renderUsage(data);
+    renderOpenRouter(data);
     renderProjects(data);
+    renderApple(data);
     renderTelegram(data.activity.telegramEvents || []);
     renderLogContainer('openclawLogs', data.logs.openclaw || []);
     renderLogContainer('haLogs', data.logs.homeassistant || []);
@@ -448,6 +696,87 @@ async function load() {
   }
 }
 
+async function copyGatewayAuth() {
+  const btn = document.getElementById('copyGatewayAuthBtn');
+  const original = btn ? btn.textContent : '';
+  try {
+    if (btn) btn.textContent = 'Copiando...';
+    const res = await fetch('/api/gateway-auth', { cache: 'no-store' });
+    const data = await res.json();
+    if (!res.ok || !data?.ok) {
+      throw new Error(data?.message || 'No se pudo leer auth del gateway');
+    }
+    const text = `URL: ${data.gatewayUrl}\nTOKEN: ${data.token}`;
+    await navigator.clipboard.writeText(text);
+    if (btn) btn.textContent = '✅ Copiado';
+  } catch (e) {
+    if (btn) btn.textContent = '❌ Error';
+    alert(`No se pudo copiar token: ${String(e.message || e)}`);
+  } finally {
+    if (btn) setTimeout(() => { btn.textContent = original || '🔑 Copiar token'; }, 1600);
+  }
+}
+
+async function refreshUpdateStatus() {
+  const pill = document.getElementById('updateStatusPill');
+  if (!pill) return;
+  try {
+    const res = await fetch('/api/update-status', { cache: 'no-store' });
+    const data = await res.json();
+    if (!res.ok || !data?.ok) throw new Error(data?.message || 'status no disponible');
+    const installed = data.installed || '-';
+    const latest = data.latest || '-';
+    if (data.available) {
+      pill.className = 'update-pill warn';
+      pill.textContent = `Update: ${installed} -> ${latest}`;
+    } else {
+      pill.className = 'update-pill ok';
+      pill.textContent = `Update: al día (${installed})`;
+    }
+  } catch (e) {
+    pill.className = 'update-pill bad';
+    pill.textContent = 'Update: error';
+  }
+}
+
+async function resetUsageCounters() {
+  const ok = confirm('Esto reseteará los contadores de tokens y costos desde este momento. ¿Continuar?');
+  if (!ok) return;
+  const btn = document.getElementById('resetUsageBtn');
+  const original = btn ? btn.textContent : '';
+  try {
+    if (btn) {
+      btn.textContent = 'Reseteando...';
+      btn.disabled = true;
+    }
+    const res = await fetch('/api/usage/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.ok) throw new Error(data?.message || 'No se pudo resetear métricas');
+    await load();
+    const snap = data?.openrouterSnapshot?.ok
+      ? ` Crédito OpenRouter al reset: ${fmtMoney(data.openrouterSnapshot.remainingUsd, 'USD')}.`
+      : '';
+    alert(`Contadores reseteados en ${fmtDate(data.resetAtMs)}.${snap}`);
+  } catch (e) {
+    alert(`Error al resetear métricas: ${String(e.message || e)}`);
+  } finally {
+    if (btn) {
+      btn.textContent = original || '⟲ Reset métricas';
+      btn.disabled = false;
+    }
+  }
+}
+
 document.getElementById('refreshBtn').addEventListener('click', load);
+document.getElementById('resetUsageBtn')?.addEventListener('click', resetUsageCounters);
+document.getElementById('refreshUpdateBtn')?.addEventListener('click', refreshUpdateStatus);
+document.getElementById('copyGatewayAuthBtn')?.addEventListener('click', copyGatewayAuth);
+document.getElementById('appleNotifySend')?.addEventListener('click', sendAppleNotify);
 load();
+refreshUpdateStatus();
 setInterval(load, 30000);
+setInterval(refreshUpdateStatus, 60000);
