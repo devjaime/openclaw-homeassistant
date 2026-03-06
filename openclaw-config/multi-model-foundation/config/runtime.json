@@ -1,0 +1,12 @@
+{
+  "timezone": "America/Santiago",
+  "openrouter_budget_usd": 10,
+  "daily_report": {
+    "output_dir": "reports",
+    "filename_prefix": "homeassistant-daily"
+  },
+  "limits": {
+    "max_log_chars": 200000,
+    "max_events": 1200
+  }
+}

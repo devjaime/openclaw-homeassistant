@@ -37,6 +37,8 @@ const EXTERNAL_COST_LEDGER = process.env.EXTERNAL_COST_LEDGER || '/Users/devjaim
 const USAGE_RESET_STATE_PATH = process.env.USAGE_RESET_STATE_PATH || path.join(process.env.HOME || '', '.openclaw', 'monitor-usage-reset.json');
 const OPENROUTER_CREDITS_URL = process.env.OPENROUTER_CREDITS_URL || 'https://openrouter.ai/api/v1/credits';
 const HA_SECRETS_ENV_PATH = process.env.HA_SECRETS_ENV_PATH || path.join(process.env.HOME || '', '.openclaw', 'secrets.env');
+const MODE_LOCAL_MODEL = process.env.MODE_LOCAL_MODEL || 'custom-127-0-0-1-11434/qwen2.5:7b';
+const MODE_CLOUD_MODEL = process.env.MODE_CLOUD_MODEL || 'openrouter/minimax/minimax-m2.5';
 
 const MODEL_PRICE_PER_TOKEN_USD = {
   'google/gemini-2.5-flash-lite': {
@@ -652,6 +654,173 @@ async function collectLastActivity() {
   return candidates[0] || null;
 }
 
+function inferTriggerFromArtifacts(filePath = '', text = '') {
+  const f = String(filePath || '').toLowerCase();
+  const t = String(text || '').toLowerCase();
+  if (f.includes('/cron/') || t.includes('cron')) return 'cron';
+  if (t.includes('telegram') || f.includes('telegram')) return 'telegram';
+  if (t.includes('scheduler') || f.includes('scheduler')) return 'scheduler';
+  if (t.includes('discord') || f.includes('discord')) return 'discord';
+  if (t.includes('slack') || f.includes('slack')) return 'slack';
+  return 'session';
+}
+
+function extractPromptText(row) {
+  const extractFromContentParts = (parts) => {
+    if (!Array.isArray(parts)) return '';
+    const texts = [];
+    for (const part of parts) {
+      if (!part || typeof part !== 'object') continue;
+      if (typeof part.text === 'string' && part.text.trim()) texts.push(part.text.trim());
+      if (typeof part.thinking === 'string' && part.thinking.trim()) texts.push(part.thinking.trim());
+      if (part.type === 'toolCall' && part.arguments) {
+        const args = typeof part.arguments === 'string' ? part.arguments : JSON.stringify(part.arguments);
+        texts.push(`toolCall:${part.name || 'unknown'} ${args || ''}`.trim());
+      }
+    }
+    return texts.join('\n').trim();
+  };
+
+  const candidates = [
+    row?.prompt,
+    row?.text,
+    row?.content,
+    row?.input,
+    row?.body,
+    row?.message?.content,
+    row?.message?.text,
+    row?.message?.body,
+    extractFromContentParts(row?.message?.content),
+    extractFromContentParts(row?.content),
+  ];
+  for (const item of candidates) {
+    if (typeof item === 'string' && item.trim().length > 0) {
+      return item.trim();
+    }
+    if (Array.isArray(item)) {
+      const text = extractFromContentParts(item);
+      if (text) return text;
+    }
+  }
+  return '';
+}
+
+function collectSensitiveIndicators(params) {
+  const out = [];
+  const text = String(params?.text || '');
+  const ts = params?.ts || null;
+  const trigger = params?.trigger || 'session';
+  const source = params?.source || '';
+
+  const rules = [
+    { id: 'private_key', re: /(id_rsa|id_ed25519|private[_-]?key|BEGIN\s+RSA\s+PRIVATE\s+KEY)/i, severity: 'critical', category: 'credenciales' },
+    { id: 'api_key', re: /(api[_-]?key|openrouter|gemini_api_key|token\s*[:=]|bearer\s+[a-z0-9._-]+)/i, severity: 'high', category: 'credenciales' },
+    { id: 'password', re: /(password|passwd|contrase(?:n|ñ)a|secret)/i, severity: 'high', category: 'credenciales' },
+    { id: 'dot_env', re: /(\.env|secrets\.env|openclaw\.json|credentials?\/)/i, severity: 'high', category: 'archivos_sensibles' },
+    { id: 'home_path', re: /(\/users\/[^/\s]+\/|~\/)/i, severity: 'medium', category: 'filesystem' },
+    { id: 'ssh_path', re: /(\/\.ssh\/|~\/\.ssh\/)/i, severity: 'high', category: 'filesystem' },
+  ];
+
+  for (const rule of rules) {
+    const m = text.match(rule.re);
+    if (!m) continue;
+    out.push({
+      ts,
+      trigger,
+      severity: rule.severity,
+      category: rule.category,
+      indicator: rule.id,
+      match: String(m[0]).slice(0, 120),
+      source,
+      detail: String(text).slice(0, 220),
+    });
+  }
+  return out;
+}
+
+async function collectPromptAndSensitiveHistory() {
+  const agentsBase = path.join(process.env.HOME || '', '.openclaw', 'agents');
+  const sessionRoots = [];
+  try {
+    if (fs.existsSync(agentsBase)) {
+      for (const dirent of fs.readdirSync(agentsBase, { withFileTypes: true })) {
+        if (!dirent.isDirectory()) continue;
+        const sessionsPath = path.join(agentsBase, dirent.name, 'sessions');
+        if (fs.existsSync(sessionsPath)) sessionRoots.push(sessionsPath);
+      }
+    }
+  } catch {}
+  if (!sessionRoots.length) {
+    sessionRoots.push(path.join(agentsBase, 'main', 'sessions'));
+  }
+  const cronRoot = path.join(process.env.HOME || '', '.openclaw', 'cron', 'runs');
+  const files = [];
+  for (const root of sessionRoots) {
+    files.push(...(await listRecentJsonlFiles(root, 16)));
+  }
+  files.push(...(await listRecentJsonlFiles(cronRoot, 16)));
+
+  const promptHistory = [];
+  const sensitiveAccess = [];
+  const dedupe = new Set();
+
+  for (const file of files) {
+    const lines = await readLastLines(file, 900);
+    for (const line of lines) {
+      const row = safeJsonParse(line, null);
+      if (!row || typeof row !== 'object') continue;
+      const tsRaw = row.timestamp ? Date.parse(row.timestamp) : n(row.ts);
+      const ts = Number.isFinite(tsRaw) && tsRaw > 0 ? tsRaw : null;
+      const text = extractPromptText(row);
+      const trigger = inferTriggerFromArtifacts(file, `${line}\n${text}`);
+      const source = path.basename(file);
+      const role = String(row.role || row.type || row?.message?.role || '').trim() || 'unknown';
+
+      if (text && text.length > 1) {
+        promptHistory.push({
+          ts,
+          trigger,
+          role,
+          source,
+          prompt: text.slice(0, 360),
+        });
+      }
+
+      const indicators = collectSensitiveIndicators({
+        text: `${line}\n${text}`,
+        ts,
+        trigger,
+        source,
+      });
+      for (const item of indicators) {
+        const key = `${item.ts || 0}|${item.severity}|${item.indicator}|${item.match}|${item.source}`;
+        if (dedupe.has(key)) continue;
+        dedupe.add(key);
+        sensitiveAccess.push(item);
+      }
+    }
+  }
+
+  promptHistory.sort((a, b) => n(b.ts) - n(a.ts));
+  sensitiveAccess.sort((a, b) => n(b.ts) - n(a.ts));
+
+  const severityCounts = sensitiveAccess.reduce((acc, item) => {
+    const key = String(item.severity || 'low');
+    acc[key] = n(acc[key]) + 1;
+    return acc;
+  }, {});
+
+  return {
+    promptHistory: promptHistory.slice(0, 120),
+    sensitiveAccess: sensitiveAccess.slice(0, 120),
+    stats: {
+      promptCount: promptHistory.length,
+      sensitiveCount: sensitiveAccess.length,
+      severityCounts,
+    },
+  };
+}
+
 function gitCount(repo, sinceExpr) {
   const out = run(`git -C "${repo}" rev-list --count --since="${sinceExpr}" HEAD`);
   if (isErr(out)) return null;
@@ -772,6 +941,41 @@ async function haApi(pathname, opts = {}) {
   }
 }
 
+function parseMaybeJson(value) {
+  if (value == null) return null;
+  if (typeof value === 'object') return value;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  return safeJsonParse(raw, null);
+}
+
+function normalizeHaAssetUrl(urlOrPath) {
+  const raw = String(urlOrPath || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith('/')) return `${HA_URL}${raw}`;
+  return `${HA_URL}/${raw}`;
+}
+
+function parseRoomMapping(value) {
+  const rooms = Array.isArray(value) ? value : [];
+  return rooms
+    .filter((r) => Array.isArray(r))
+    .map((r) => ({
+      segmentId: r[0] ?? null,
+      roomId: r[1] ?? null,
+      name: r[2] || `Segment ${r[0] ?? '?'}`,
+    }));
+}
+
+function parseCleanHistory(cleanRecord) {
+  const rows = Array.isArray(cleanRecord?.history_list) ? cleanRecord.history_list : [];
+  return rows.slice(0, 24).map((row) => ({
+    label: String(row?.label || ''),
+    startTs: n(row?.stime) > 0 ? n(row.stime) : null,
+  }));
+}
+
 async function collectAppleStatus() {
   const statesRes = await haApi('/api/states');
   if (!statesRes.ok) {
@@ -846,6 +1050,97 @@ async function collectAppleStatus() {
   };
 }
 
+async function collectVacuumStatus() {
+  const statesRes = await haApi('/api/states');
+  if (!statesRes.ok) {
+    return {
+      ok: false,
+      error: statesRes.error || 'No se pudo leer estados HA',
+      vacuums: [],
+      primary: null,
+    };
+  }
+
+  const states = Array.isArray(statesRes.data) ? statesRes.data : [];
+  const vacuumStates = states.filter((s) => String(s?.entity_id || '').startsWith('vacuum.'));
+  const cameraStates = states.filter((s) => String(s?.entity_id || '').startsWith('camera.'));
+
+  const vacuums = vacuumStates.map((s) => {
+    const attrs = s?.attributes && typeof s.attributes === 'object' ? s.attributes : {};
+    const mapManagement = parseMaybeJson(attrs['vacuum_map.map_management']);
+    const mapObj = parseMaybeJson(attrs['vacuum_map.map_obj_name']);
+    const trajectoryObj = parseMaybeJson(attrs['vacuum_map.trajectory_obj_name']);
+    const cleanRecord = parseMaybeJson(attrs['vacuum_map.clean_record']);
+    const roomMapping = parseRoomMapping(attrs.room_mapping);
+    const zoneIdsRaw = String(attrs['vacuum.zone_ids'] || '').trim();
+    const zoneIds = zoneIdsRaw ? zoneIdsRaw.split(/[,\s]+/).filter(Boolean) : [];
+    const maps = Array.isArray(mapManagement?.map_array)
+      ? mapManagement.map_array.map((m) => ({
+          mapId: m?.map_id ?? null,
+          mapName: String(m?.map_name || '').trim() || '(sin nombre)',
+          objectName: String(m?.obj_name || ''),
+          isCurrent: Boolean(m?.is_current),
+          temp: n(m?.temp),
+        }))
+      : [];
+
+    let mapImagePath = String(attrs.entity_picture || '');
+    let mapImageEntityId = '';
+    if (!mapImagePath) {
+      const cam = cameraStates.find((c) => {
+        const eid = String(c.entity_id || '').toLowerCase();
+        const fn = String(c.attributes?.friendly_name || '').toLowerCase();
+        return /vacuum|robot|miot|xiaomi|map/.test(eid) || /vacuum|robot|miot|xiaomi|map/.test(fn);
+      });
+      if (cam?.attributes?.entity_picture) {
+        mapImagePath = String(cam.attributes.entity_picture);
+        mapImageEntityId = String(cam.entity_id || '');
+      }
+    }
+
+    const mapImageUrl = normalizeHaAssetUrl(mapImagePath);
+    const cleanArea = n(attrs['vacuum.cleaning_area'] ?? attrs.clean_area);
+    const cleanMinutes = n(attrs['vacuum.cleaning_time'] ?? attrs.clean_time);
+    const battery = n(attrs.battery_level);
+    const lastCleanTs = n(attrs['vacuum.last_clean_time']) > 0
+      ? n(attrs['vacuum.last_clean_time']) * 1000
+      : null;
+    const cleanHistory = parseCleanHistory(cleanRecord);
+
+    return {
+      entityId: s.entity_id,
+      name: attrs.friendly_name || s.entity_id,
+      state: s.state || 'unknown',
+      statusDesc: String(attrs['vacuum.status_desc'] || attrs.status || '').trim(),
+      battery: Number.isFinite(battery) ? battery : null,
+      fanSpeed: attrs.fan_speed || attrs.fan_level || '',
+      cleanArea,
+      cleanMinutes,
+      lastCleanTs,
+      lastUpdated: s.last_updated || null,
+      roomMapping,
+      zoneIds,
+      map: {
+        hasImage: Boolean(mapImageUrl),
+        imageUrl: mapImageUrl,
+        imageEntityId: mapImageEntityId,
+        objectName: String(mapObj?.obj_name || ''),
+        trajectoryObjectName: String(trajectoryObj?.obj_name || ''),
+        currentMapId: attrs['vacuum_map.current_map_id'] ?? null,
+        maps,
+        mapCount: maps.length,
+      },
+      cleanHistory,
+    };
+  });
+
+  return {
+    ok: true,
+    vacuums,
+    primary: vacuums[0] || null,
+  };
+}
+
 async function buildStatus() {
   const cfg = await readOpenClawConfig();
   const gatewayUrl = resolveGatewayUrl(cfg);
@@ -861,13 +1156,40 @@ async function buildStatus() {
   const usageStats = await collectUsageStats(cfg);
   const projectStats = await collectProjectStats();
   const lastActivity = await collectLastActivity();
+  const security = await collectPromptAndSensitiveHistory();
   const apple = await collectAppleStatus();
+  const vacuum = await collectVacuumStatus();
 
   const errCount = openclawLogs.filter((l) => /\berror\b|failed|unauthorized|timeout/i.test(l)).length;
   const telegramEvents = openclawLogs.filter((l) => /telegram/i.test(l)).slice(-10);
 
   const modelPrimary = cfg?.agents?.defaults?.model?.primary || 'desconocido';
-  const modelModeGuess = modelPrimary.includes('gemini')
+  const configuredModels = Object.entries(cfg?.agents?.defaults?.models || {})
+    .map(([key, value]) => ({
+      model: key,
+      alias: value?.alias || '',
+      source: 'config',
+    }))
+    .filter((m) => typeof m.model === 'string' && m.model.trim().length > 0);
+  const usageModels = ((usageStats?.models || []).map((m) => ({
+    model: m?.model || '',
+    alias: '',
+    source: 'usage',
+  }))).filter((m) => m.model);
+  const modelMap = new Map();
+  for (const row of [...configuredModels, ...usageModels]) {
+    if (!modelMap.has(row.model)) {
+      modelMap.set(row.model, row);
+    } else if (!modelMap.get(row.model)?.alias && row.alias) {
+      modelMap.set(row.model, row);
+    }
+  }
+  const availableModels = [...modelMap.values()].sort((a, b) => String(a.model).localeCompare(String(b.model)));
+  const modelModeGuess = modelPrimary === MODE_LOCAL_MODEL
+    ? 'local'
+    : modelPrimary === MODE_CLOUD_MODEL
+      ? 'cloud'
+      : modelPrimary.includes('gemini')
     ? 'dia (gemini)'
     : modelPrimary.includes('minimax') || modelPrimary.includes('MiniMax')
       ? 'potente (minmax)'
@@ -913,6 +1235,9 @@ async function buildStatus() {
       configuredPort,
       listening: openclawListening,
       modelPrimary,
+      availableModels,
+      modeLocalModel: MODE_LOCAL_MODEL,
+      modeCloudModel: MODE_CLOUD_MODEL,
       modelModeGuess,
       telegramEnabled: Boolean(cfg?.channels?.telegram?.enabled),
       telegramBot: cfg?.channels?.telegram?.name || '',
@@ -932,14 +1257,81 @@ async function buildStatus() {
       cronError: cron.error || null,
     },
     usage: usageStats,
+    security,
     projects: projectStats,
     lastActivity,
     apple,
+    vacuum,
     services,
     logs: {
       openclaw: openclawLogs.slice(-120),
       homeassistant: haLogs.slice(-120),
     },
+  };
+}
+
+async function setModelMode(mode) {
+  const normalized = String(mode || '').trim().toLowerCase();
+  if (!['local', 'cloud'].includes(normalized)) {
+    return { ok: false, message: `Modo inválido: ${mode}` };
+  }
+
+  let cfg = await readOpenClawConfig();
+  if (!cfg || typeof cfg !== 'object') {
+    cfg = {};
+  }
+
+  const targetModel = normalized === 'local' ? MODE_LOCAL_MODEL : MODE_CLOUD_MODEL;
+  cfg.agents = cfg.agents && typeof cfg.agents === 'object' ? cfg.agents : {};
+  cfg.agents.defaults =
+    cfg.agents.defaults && typeof cfg.agents.defaults === 'object' ? cfg.agents.defaults : {};
+  cfg.agents.defaults.model =
+    cfg.agents.defaults.model && typeof cfg.agents.defaults.model === 'object'
+      ? cfg.agents.defaults.model
+      : {};
+  cfg.agents.defaults.model.primary = targetModel;
+
+  cfg.agents.defaults.models =
+    cfg.agents.defaults.models && typeof cfg.agents.defaults.models === 'object'
+      ? cfg.agents.defaults.models
+      : {};
+  cfg.agents.defaults.models[MODE_LOCAL_MODEL] = {
+    ...(cfg.agents.defaults.models[MODE_LOCAL_MODEL] || {}),
+    alias: 'modo_local',
+  };
+  cfg.agents.defaults.models[MODE_CLOUD_MODEL] = {
+    ...(cfg.agents.defaults.models[MODE_CLOUD_MODEL] || {}),
+    alias: 'modo_cloud',
+  };
+
+  cfg.channels = cfg.channels && typeof cfg.channels === 'object' ? cfg.channels : {};
+  cfg.channels.telegram =
+    cfg.channels.telegram && typeof cfg.channels.telegram === 'object' ? cfg.channels.telegram : {};
+  const currentCustom = Array.isArray(cfg.channels.telegram.customCommands)
+    ? cfg.channels.telegram.customCommands
+    : [];
+  cfg.channels.telegram.customCommands = [
+    ...currentCustom,
+    { command: 'modo_local', description: 'Cambiar a modo local' },
+    { command: 'modo_cloud', description: 'Cambiar a modo cloud' },
+  ].filter((entry, idx, arr) => arr.findIndex((x) => x.command === entry.command) === idx);
+
+  await fsp.writeFile(OPENCLAW_CONFIG, `${JSON.stringify(cfg, null, 2)}\n`, 'utf8');
+  const restart = await performServiceAction('openclaw', 'restart', cfg);
+  if (!restart.ok) {
+    return {
+      ok: false,
+      message: `Modo ${normalized} guardado, pero falló reinicio de OpenClaw: ${restart.message}`,
+      mode: normalized,
+      modelPrimary: targetModel,
+    };
+  }
+  return {
+    ok: true,
+    message: `Modo ${normalized} aplicado (${targetModel})`,
+    mode: normalized,
+    modelPrimary: targetModel,
+    restart,
   };
 }
 
@@ -966,22 +1358,23 @@ async function performServiceAction(service, action, cfg) {
   if (service === 'openclaw') {
     const gatewayUrl = resolveGatewayUrl(cfg);
     const port = portFromGatewayUrl(gatewayUrl);
+    const token = String(cfg?.gateway?.auth?.token || '').trim();
     if (action === 'stop' || action === 'restart') {
-      runShell('pkill -9 -f openclaw-gateway || true');
+      runShell(`pkill -9 -f 'openclaw gateway run --bind loopback --port ${port}' || true`);
     }
     if (action === 'start' || action === 'restart') {
-      const startCmd =
-        `nohup "${OPENCLAW_BIN}" gateway run --bind loopback --port ${port} --force > /tmp/openclaw-gateway.log 2>&1 &`;
+      const authFlags = token ? `--auth token --token "${token}"` : '';
+      const startCmd = `nohup "${OPENCLAW_BIN}" gateway run --bind loopback --port ${port} ${authFlags} --force > /tmp/openclaw-gateway.log 2>&1 &`;
       const started = runShell(startCmd);
       if (!started.ok) {
         return { ok: false, message: `No se pudo iniciar OpenClaw:\n${started.output}` };
       }
     }
     let running = false;
-    for (let i = 0; i < 10; i += 1) {
+    for (let i = 0; i < 20; i += 1) {
       running = await checkPort('127.0.0.1', port);
       if (running) break;
-      await new Promise((r) => setTimeout(r, 600));
+      await new Promise((r) => setTimeout(r, 800));
     }
     return {
       ok: true,
@@ -1086,6 +1479,18 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (u.pathname === '/api/model-mode' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const mode = String(body?.mode || '').trim();
+    const out = await setModelMode(mode);
+    res.writeHead(out.ok ? 200 : 400, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    res.end(JSON.stringify(out));
+    return;
+  }
+
   if (u.pathname === '/api/usage/reset' && req.method === 'POST') {
     const cfg = await readOpenClawConfig();
     const snapshot = await fetchOpenRouterCredits(cfg);
@@ -1127,11 +1532,92 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (u.pathname === '/api/vacuum/action' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const entityId = String(body?.entityId || '').trim();
+    const action = String(body?.action || '').trim().toLowerCase();
+    const segmentIdsInput = Array.isArray(body?.segmentIds) ? body.segmentIds : [];
+
+    if (!entityId || !entityId.startsWith('vacuum.')) {
+      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, message: 'entityId inválido (esperado vacuum.*)' }));
+      return;
+    }
+
+    const actionMap = {
+      start: 'start',
+      pause: 'pause',
+      stop: 'stop',
+      dock: 'return_to_base',
+      locate: 'locate',
+    };
+
+    if (action === 'clean_zone') {
+      const segmentIds = segmentIdsInput
+        .map((v) => Number(v))
+        .filter((v) => Number.isFinite(v) && v > 0);
+      if (!segmentIds.length) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: false, message: 'segmentIds vacío para clean_zone' }));
+        return;
+      }
+      const out = await haApi('/api/services/xiaomi_miot/send_command?return_response', {
+        method: 'POST',
+        body: {
+          entity_id: entityId,
+          method: 'app_segment_clean',
+          params: [{ segments: segmentIds, repeat: 1 }],
+        },
+      });
+      const sr = out?.data?.service_response;
+      if (!out.ok || sr?.error) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          ok: false,
+          message: sr?.error || out.error || 'No se pudo ejecutar clean_zone',
+        }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({
+        ok: true,
+        message: `Limpieza por zona enviada (${segmentIds.join(', ')})`,
+      }));
+      return;
+    }
+
+    const service = actionMap[action];
+    if (!service) {
+      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, message: `Acción inválida: ${action}` }));
+      return;
+    }
+
+    const out = await haApi(`/api/services/vacuum/${service}`, {
+      method: 'POST',
+      body: { entity_id: entityId },
+    });
+    if (!out.ok) {
+      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, message: out.error || `No se pudo ejecutar ${action}` }));
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: true, message: `Acción ${action} enviada` }));
+    return;
+  }
+
   if (u.pathname === '/app.js') {
     return staticFile(res, 'app.js', 'application/javascript; charset=utf-8');
   }
+  if (u.pathname === '/workroom.js') {
+    return staticFile(res, 'workroom.js', 'application/javascript; charset=utf-8');
+  }
   if (u.pathname === '/styles.css') {
     return staticFile(res, 'styles.css', 'text/css; charset=utf-8');
+  }
+  if (u.pathname === '/workroom' || u.pathname === '/workroom.html') {
+    return staticFile(res, 'workroom.html', 'text/html; charset=utf-8');
   }
   if (u.pathname === '/' || u.pathname === '/index.html') {
     return staticFile(res, 'index.html', 'text/html; charset=utf-8');

@@ -1,0 +1,33 @@
+{
+  "tasks": {
+    "development": {
+      "model": "minimax/minimax-m2.5",
+      "max_tokens": 2200,
+      "temperature": 0.2,
+      "reason": "coding, planning, refactors"
+    },
+    "daily_summary": {
+      "model": "google/gemini-3-flash-preview",
+      "max_tokens": 1400,
+      "temperature": 0.15,
+      "reason": "long logs, concise structured summary"
+    },
+    "vision_analysis": {
+      "model": "moonshotai/kimi-k2.5",
+      "max_tokens": 1600,
+      "temperature": 0.2,
+      "reason": "image interpretation"
+    },
+    "fallback": {
+      "model": "google/gemini-3-flash-preview",
+      "max_tokens": 1200,
+      "temperature": 0.2,
+      "reason": "safe default"
+    }
+  },
+  "pricing_usd_per_token": {
+    "minimax/minimax-m2.5": { "input": 0.0000003, "output": 0.0000011 },
+    "google/gemini-3-flash-preview": { "input": 0.0000005, "output": 0.000003 },
+    "moonshotai/kimi-k2.5": { "input": 0.00000045, "output": 0.0000022 }
+  }
+}

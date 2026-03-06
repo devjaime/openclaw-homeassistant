@@ -11,19 +11,19 @@ if [[ -z "$TXT" ]]; then
   exit 0
 fi
 
-if [[ "$TXT" =~ ^(modo|usar|cambiar[[:space:]]+a)[[:space:]]+gemini$ ]] || [[ "$TXT" =~ ^gemini$ ]]; then
+if [[ "$TXT" =~ ^(modo|usar|cambiar[[:space:]]+a)[[:space:]]+gemini$ ]]; then
   "$MODE_SH" day >/dev/null
   echo "ROUTED model-day"
   exit 0
 fi
 
-if [[ "$TXT" =~ ^(modo|usar|cambiar[[:space:]]+a)[[:space:]]+(minmax|minimax|potente|power)$ ]] || [[ "$TXT" =~ ^(minmax|minimax)$ ]]; then
+if [[ "$TXT" =~ ^(modo|usar|cambiar[[:space:]]+a)[[:space:]]+(minmax|minimax|potente|power)$ ]]; then
   "$MODE_SH" minmax >/dev/null
   echo "ROUTED model-minmax"
   exit 0
 fi
 
-if [[ "$TXT" =~ ^(modo|usar|cambiar[[:space:]]+a)[[:space:]]+(ollama|local|noche)$ ]] || [[ "$TXT" =~ ^(ollama|local)$ ]]; then
+if [[ "$TXT" =~ ^(modo|usar|cambiar[[:space:]]+a)[[:space:]]+(ollama|local|noche)$ ]]; then
   "$MODE_SH" night >/dev/null
   echo "ROUTED model-night"
   exit 0

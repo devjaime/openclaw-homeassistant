@@ -54,3 +54,23 @@ Script de enrutamiento:
 
 Prompt base recomendado para OpenClaw:
 - `homeassistant-tools/OPENCLAW_TELEGRAM_PROMPT.md`
+
+## Estado actualizado (2026-03-06)
+
+- OpenClaw actualizado a `2026.3.2` (canal estable).
+- Gateway relinkeado al binario actual y validado con `openclaw gateway health`.
+- Dashboard local (`monitor-ui`) extendido con bloque de aspiradora Xiaomi:
+  - estado/bateria/ultima limpieza
+  - metadata de mapa y zonas
+  - acciones (`start`, `pause`, `stop`, `dock`, `locate`, `clean_zone`)
+
+### Smoke test aplicado
+```bash
+openclaw --version
+openclaw update status --json
+openclaw gateway health --url ws://127.0.0.1:18789 --token "$(<token_desde_openclaw.json>)" --json
+curl -s http://127.0.0.1:18990/api/status | jq '.vacuum.primary.entityId'
+curl -s -X POST http://127.0.0.1:18990/api/vacuum/action \
+  -H 'Content-Type: application/json' \
+  -d '{"entityId":"vacuum.xiaomi_ov81gl_3983_robot_cleaner","action":"stop"}'
+```

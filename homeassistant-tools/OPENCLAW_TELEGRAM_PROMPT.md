@@ -57,6 +57,12 @@ Nota de trazabilidad:
 5. Si el comando devuelve `ROUTED alexa-command`, responde al usuario:
 `✅ Comando enviado a Alexa.`
 
-6. Si devuelve `NOOP no-alexa-intent`, continúa flujo normal del asistente.
+6. Luego evalua intencion de camara ejecutando:
+`/Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant/homeassistant-tools/cam-intent.sh "<mensaje_usuario>"`
+
+Si devuelve:
+- `ROUTED camera-send-snapshot ...` -> responder `✅ Captura enviada por Telegram.`
+- `ROUTED camera-send-clip ...` -> responder `✅ Clip enviado por Telegram.`
+- `NOOP no-camera-intent` -> continuar flujo normal del asistente.
 
 7. No expongas tokens, cookies ni credenciales en la respuesta.

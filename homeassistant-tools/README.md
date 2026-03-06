@@ -22,38 +22,38 @@ HA_TOKEN="TU_TOKEN_AQUI"
 ./ha.sh entities
 ```
 
-## 5) Cámara recomendada para OpenClaw
-- Entidad: `camera.patio_rtsp_sub`
+## 5) Camara (Yoosee)
+Entidad por defecto del script: `camera.yoosee_patio_sub`
 
 ```bash
 ./cam.sh list
-./cam.sh state camera.patio_rtsp_sub
-./cam.sh probe camera.patio_rtsp_sub
-./cam.sh snapshot camera.patio_rtsp_sub /tmp/patio.jpg
+./cam.sh probe sub
+./cam.sh snapshot sub
+./cam.sh send sub
+./cam.sh clip sub 8
+./cam.sh send-clip sub 8
 ```
 
-## 6) Controlar dispositivos
+Alias soportados:
+- `sub`, `patio`, `yoosee`, `yoosee_sub`
+- `main`, `yoosee_main`
+
+## 6) Telegram intents para camara
 
 ```bash
-./ha.sh service light turn_on '{"entity_id":"light.sala"}'
-./ha.sh service light turn_off '{"entity_id":"light.sala"}'
-./ha.sh state climate.living_room
+./cam-intent.sh "manda captura de la camara patio"
+./cam-intent.sh "manda clip de 10 segundos de la camara patio"
 ```
 
-## Seguridad
-- Mantén HA en red local.
-- No subas tokens a git.
-- Rota token si se expone.
-
 ## 7) Alexa autonoma (notify/media_player)
-
-Usa el script `alexa.sh` para que OpenClaw detecte automaticamente la mejor ruta (`notify.*` o `media_player.*`) y envie mensajes sin tener que ajustar el servicio manualmente.
 
 ```bash
 ./alexa.sh discover
 ./alexa.sh test
 ./alexa.sh send "Jaime esta almorzando"
-# opcional con target explicito:
-./alexa.sh send "Hay movimiento en patio" media_player.echo_dot_sala
-./alexa.sh send "Hola" notify.alexa_media_sala
 ```
+
+## Seguridad
+- Mantener HA en red local.
+- No subir tokens ni credenciales a git.
+- Rotar token si se expone.

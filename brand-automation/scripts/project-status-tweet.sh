@@ -24,8 +24,7 @@ resolve_repo() {
       ;;
     openclaw|openclaw-homeassistant)
       for p in \
-        "/Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant" \
-        "/Users/devjaime/Desktop/03_PROYECTOS_PERSONALES/openclaw"; do
+        "/Users/devjaime/.openclaw/workspace/projects/openclaw-homeassistant"; do
         [[ -d "$p/.git" ]] && { printf '%s' "$p"; return; }
       done
       ;;

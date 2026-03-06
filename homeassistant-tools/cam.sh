@@ -17,8 +17,10 @@ if [[ -z "$HA_TOKEN" ]]; then
   exit 1
 fi
 
-DEFAULT_ENTITY="camera.patio_rtsp_sub"
+DEFAULT_ENTITY="camera.yoosee_patio_sub"
 MEDIA_DIR="${HOME}/.openclaw/workspace/projects/homeassistant/media"
+HA_WWW_CLIPS_DIR="${HOME}/.openclaw/workspace/projects/openclaw-homeassistant/homeassistant-infra/config/www/clips"
+HA_CONFIG_DIR="${HOME}/.openclaw/workspace/projects/openclaw-homeassistant/homeassistant-infra/config"
 DEFAULT_PROMPT="Describe la imagen en espanol (escena, objetos, personas, riesgos visibles y accion recomendada en maximo 6 lineas)."
 cmd="${1:-help}"
 shift || true
@@ -29,6 +31,26 @@ api_get() {
     -H "Authorization: Bearer ${HA_TOKEN}" \
     -H "Content-Type: application/json" \
     "${HA_URL}${path}"
+}
+
+api_post() {
+  local path="$1"
+  local data="$2"
+  curl -sS -X POST \
+    -H "Authorization: Bearer ${HA_TOKEN}" \
+    -H "Content-Type: application/json" \
+    "${HA_URL}${path}" \
+    -d "$data"
+}
+
+resolve_entity() {
+  local entity="${1:-$DEFAULT_ENTITY}"
+  case "$entity" in
+    sub|patio|yoosee|yoosee_sub) printf "camera.yoosee_patio_sub\n" ;;
+    main|yoosee_main) printf "camera.yoosee_patio_main\n" ;;
+    camera.*) printf "%s\n" "$entity" ;;
+    *) printf "%s\n" "$DEFAULT_ENTITY" ;;
+  esac
 }
 
 default_target() {
@@ -64,6 +86,71 @@ latest_valid_snapshot() {
   return 1
 }
 
+rtsp_from_entity() {
+  local entity="$1"
+  local key=""
+  case "$entity" in
+    camera.yoosee_patio_main) key="cam_yoosee_rtsp_main" ;;
+    *) key="cam_yoosee_rtsp_sub" ;;
+  esac
+  local secrets_yaml="${HA_CONFIG_DIR}/secrets.yaml"
+  if [[ ! -f "$secrets_yaml" ]]; then
+    return 1
+  fi
+  local line
+  line="$(rg "^${key}:[[:space:]]*" "$secrets_yaml" -S | head -n1 || true)"
+  if [[ -z "$line" ]]; then
+    return 1
+  fi
+  local value
+  value="$(printf '%s' "$line" | sed -E "s/^${key}:[[:space:]]*//; s/[[:space:]]+$//; s/^['\"]//; s/['\"]$//")"
+  if [[ -z "$value" ]]; then
+    return 1
+  fi
+  printf '%s\n' "$value"
+}
+
+snapshot_via_rtsp_ffmpeg() {
+  local entity="$1"
+  local out="$2"
+  local rtsp
+  rtsp="$(rtsp_from_entity "$entity" || true)"
+  if [[ -z "$rtsp" ]]; then
+    return 1
+  fi
+  timeout 20 ffmpeg -y -hide_banner -loglevel error \
+    -rtsp_transport udp \
+    -i "$rtsp" \
+    -frames:v 1 \
+    "$out" >/dev/null 2>&1 || true
+  is_jpeg "$out"
+}
+
+clip_via_rtsp_ffmpeg() {
+  local entity="$1"
+  local duration="$2"
+  local out="$3"
+  local rtsp
+  rtsp="$(rtsp_from_entity "$entity" || true)"
+  if [[ -z "$rtsp" ]]; then
+    return 1
+  fi
+  timeout $((duration + 20)) ffmpeg -y -hide_banner -loglevel error \
+    -rtsp_transport udp \
+    -fflags +genpts \
+    -analyzeduration 10M \
+    -probesize 10M \
+    -i "$rtsp" \
+    -t "$duration" \
+    -an \
+    -c:v libx264 \
+    -preset veryfast \
+    -crf 28 \
+    -pix_fmt yuv420p \
+    "$out" >/dev/null 2>&1 || true
+  [[ -s "$out" ]]
+}
+
 snapshot_to_file() {
   local entity="$1"
   local out="$2"
@@ -73,6 +160,9 @@ snapshot_to_file() {
     "${HA_URL}/api/camera_proxy/${entity}"
 
   if ! is_jpeg "$out"; then
+    if snapshot_via_rtsp_ffmpeg "$entity" "$out"; then
+      return 0
+    fi
     local body
     body="$(cat "$out" 2>/dev/null || true)"
     echo "Snapshot invalido para ${entity}. Respuesta HA: ${body:-sin contenido}" >&2
@@ -105,18 +195,18 @@ case "$cmd" in
     api_get "/api/states" | jq -r '.[] | select(.entity_id|startswith("camera.")) | [.entity_id,.state,(.attributes.friendly_name//"")] | @tsv'
     ;;
   state)
-    entity="${1:-$DEFAULT_ENTITY}"
+    entity="$(resolve_entity "${1:-$DEFAULT_ENTITY}")"
     api_get "/api/states/${entity}"
     ;;
   probe)
-    entity="${1:-$DEFAULT_ENTITY}"
+    entity="$(resolve_entity "${1:-$DEFAULT_ENTITY}")"
     code="$(curl -m 8 -sS -o /dev/null -w '%{http_code}' \
       -H "Authorization: Bearer ${HA_TOKEN}" \
       "${HA_URL}/api/camera_proxy_stream/${entity}" 2>/dev/null || true)"
     printf "%s\tstream_http:%s\n" "${entity}" "${code}"
     ;;
   snapshot)
-    entity="${1:-$DEFAULT_ENTITY}"
+    entity="$(resolve_entity "${1:-$DEFAULT_ENTITY}")"
     ts="$(date +%Y%m%d-%H%M%S)"
     out="${2:-${MEDIA_DIR}/${entity//./_}-${ts}.jpg}"
     if snapshot_to_file "$entity" "$out"; then
@@ -131,7 +221,7 @@ case "$cmd" in
     fi
     ;;
   send)
-    entity="${1:-$DEFAULT_ENTITY}"
+    entity="$(resolve_entity "${1:-$DEFAULT_ENTITY}")"
     target="${2:-$(default_target)}"
     ts="$(date +%Y%m%d-%H%M%S)"
     out="${MEDIA_DIR}/${entity//./_}-${ts}.jpg"
@@ -143,7 +233,7 @@ case "$cmd" in
     echo "$out"
     ;;
   analyze)
-    entity="${1:-$DEFAULT_ENTITY}"
+    entity="$(resolve_entity "${1:-$DEFAULT_ENTITY}")"
     prompt_text="${2:-$DEFAULT_PROMPT}"
     ts="$(date +%Y%m%d-%H%M%S)"
     out="${MEDIA_DIR}/${entity//./_}-${ts}.jpg"
@@ -154,7 +244,7 @@ case "$cmd" in
     gemini_analyze_file "$out" "$prompt_text"
     ;;
   send-analyze)
-    entity="${1:-$DEFAULT_ENTITY}"
+    entity="$(resolve_entity "${1:-$DEFAULT_ENTITY}")"
     target="${2:-$(default_target)}"
     prompt_text="${3:-$DEFAULT_PROMPT}"
     ts="$(date +%Y%m%d-%H%M%S)"
@@ -168,6 +258,43 @@ case "$cmd" in
     openclaw message send --channel telegram --target "$target" --message "Analisis de camara (${entity}):\n${analysis}" >/dev/null
     echo "$out"
     ;;
+  clip)
+    entity="$(resolve_entity "${1:-$DEFAULT_ENTITY}")"
+    duration="${2:-8}"
+    if ! [[ "$duration" =~ ^[0-9]+$ ]]; then
+      echo "Duracion invalida: $duration (usa segundos enteros)" >&2
+      exit 2
+    fi
+    mkdir -p "$HA_WWW_CLIPS_DIR"
+    ts="$(date +%Y%m%d-%H%M%S)"
+    clip_name="${entity//./_}-${ts}-${duration}s.mp4"
+    clip_host_path="${HA_WWW_CLIPS_DIR}/${clip_name}"
+    clip_ha_path="/config/www/clips/${clip_name}"
+    payload="$(jq -cn --arg e "$entity" --arg f "$clip_ha_path" --argjson d "$duration" '{entity_id:$e,filename:$f,duration:$d,lookback:0}')"
+    api_post "/api/services/camera/record" "$payload" >/dev/null
+    # camera.record is async; wait up to ~25s for file to appear.
+    for _ in {1..25}; do
+      if [[ -s "$clip_host_path" ]]; then
+        echo "$clip_host_path"
+        exit 0
+      fi
+      sleep 1
+    done
+    if clip_via_rtsp_ffmpeg "$entity" "$duration" "$clip_host_path"; then
+      echo "$clip_host_path"
+      exit 0
+    fi
+    echo "No se genero clip en tiempo esperado: ${clip_host_path}" >&2
+    exit 3
+    ;;
+  send-clip)
+    entity="$(resolve_entity "${1:-$DEFAULT_ENTITY}")"
+    duration="${2:-8}"
+    target="${3:-$(default_target)}"
+    clip_path="$("$0" clip "$entity" "$duration")"
+    openclaw message send --channel telegram --target "$target" --media "$clip_path" --message "Clip ${entity} (${duration}s)" >/dev/null
+    echo "$clip_path"
+    ;;
   help|*)
     cat <<USAGE
 Usage:
@@ -178,6 +305,8 @@ Usage:
   cam.sh send [camera.entity_id] [telegram_chat_id]
   cam.sh analyze [camera.entity_id] [prompt]
   cam.sh send-analyze [camera.entity_id] [telegram_chat_id] [prompt]
+  cam.sh clip [camera.entity_id|sub|main] [segundos]
+  cam.sh send-clip [camera.entity_id|sub|main] [segundos] [telegram_chat_id]
 
 Defaults:
   entity: ${DEFAULT_ENTITY}

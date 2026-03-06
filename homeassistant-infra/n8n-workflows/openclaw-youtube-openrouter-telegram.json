@@ -1,0 +1,72 @@
+{
+  "name": "OpenClaw YouTube Summaries (OpenRouter + Telegram)",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "openclaw-youtube-summarize",
+        "httpMethod": "POST",
+        "responseMode": "onReceived"
+      },
+      "id": "Webhook_YouTube_Summary",
+      "name": "Webhook YouTube Summary",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        260,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const body = $json.body ?? $json;\n\nconst openrouterApiKey = ($env.OPENROUTER_API_KEY || '').trim();\nconst transcriptApiUrl = ($env.YT_TRANSCRIPT_API_URL || '').trim();\nconst transcriptApiKey = ($env.YT_TRANSCRIPT_API_KEY || '').trim();\nconst transcriptApiHost = ($env.YT_TRANSCRIPT_API_HOST || '').trim();\nconst telegramBotToken = ($env.TELEGRAM_BOT_TOKEN || '').trim();\nconst defaultChatId = ($env.TELEGRAM_CHAT_ID || '').trim();\nconst openclawWebhookUrl = ($env.OPENCLAW_YT_WEBHOOK_URL || 'http://127.0.0.1:5678/webhook/openclaw-youtube-backlog').trim();\nconst summaryModel = ($env.OPENROUTER_SUMMARY_MODEL || 'google/gemini-3-flash-preview').trim();\n\nif (!openrouterApiKey) {\n  throw new Error('Falta OPENROUTER_API_KEY en variables de entorno de n8n');\n}\nif (!transcriptApiUrl || !transcriptApiKey) {\n  throw new Error('Faltan YT_TRANSCRIPT_API_URL y/o YT_TRANSCRIPT_API_KEY en variables de entorno de n8n');\n}\n\nconst inputVideos = body.videos ?? body.video_urls ?? body.urls ?? body.videos_text ?? '';\nlet urls = [];\nif (Array.isArray(inputVideos)) {\n  urls = inputVideos.map((v) => (typeof v === 'string' ? v : String(v?.url || v?.video || ''))).filter(Boolean);\n} else if (typeof inputVideos === 'string') {\n  urls = inputVideos\n    .split(/[\\n,;]+/)\n    .map((x) => x.trim())\n    .filter(Boolean);\n}\nif (!urls.length && typeof body.url === 'string' && body.url.trim()) {\n  urls = [body.url.trim()];\n}\nif (!urls.length) {\n  throw new Error('No llegaron videos. Envia {\"videos\":[\"https://youtube.com/watch?v=...\"]}');\n}\n\nconst chatId = String(body.chat_id || body.telegram_chat_id || defaultChatId || '').trim();\nif (!chatId) {\n  throw new Error('Falta chat_id (payload) o TELEGRAM_CHAT_ID (env)');\n}\nif (!telegramBotToken) {\n  throw new Error('Falta TELEGRAM_BOT_TOKEN en variables de entorno de n8n');\n}\n\nfunction extractVideoId(url) {\n  try {\n    const u = new URL(url);\n    if (u.hostname.includes('youtu.be')) return u.pathname.replace('/', '').trim();\n    if (u.searchParams.get('v')) return u.searchParams.get('v');\n    const parts = u.pathname.split('/').filter(Boolean);\n    const shortsIdx = parts.indexOf('shorts');\n    if (shortsIdx >= 0 && parts[shortsIdx + 1]) return parts[shortsIdx + 1];\n    return '';\n  } catch {\n    return '';\n  }\n}\n\nfunction textFromAny(value) {\n  if (!value) return '';\n  if (typeof value === 'string') return value;\n  if (Array.isArray(value)) return value.map((x) => textFromAny(x)).filter(Boolean).join(' ');\n  if (typeof value === 'object') {\n    const keys = ['text', 'transcript', 'content', 'caption', 'line'];\n    for (const k of keys) {\n      if (value[k]) return textFromAny(value[k]);\n    }\n    return '';\n  }\n  return '';\n}\n\nfunction transcriptFromPayload(payload) {\n  if (!payload) return '';\n  const direct = textFromAny(payload);\n  if (typeof payload === 'string') return payload;\n\n  const candidates = [\n    payload.transcript,\n    payload.data,\n    payload.captions,\n    payload.subtitles,\n    payload.result,\n    payload.items,\n    payload.segments,\n  ];\n\n  for (const c of candidates) {\n    if (!c) continue;\n    if (typeof c === 'string') return c;\n    if (Array.isArray(c)) {\n      const arrText = c\n        .map((item) => {\n          if (typeof item === 'string') return item;\n          if (item && typeof item === 'object') return item.text || item.caption || item.line || item.content || '';\n          return '';\n        })\n        .filter(Boolean)\n        .join(' ');\n      if (arrText) return arrText;\n    }\n    if (c && typeof c === 'object') {\n      const objText = textFromAny(c);\n      if (objText) return objText;\n    }\n  }\n\n  return direct || '';\n}\n\nasync function fetchJson(url, options = {}) {\n  const res = await fetch(url, options);\n  const txt = await res.text();\n  let json = null;\n  try { json = JSON.parse(txt); } catch {}\n  if (!res.ok) {\n    const msg = (json?.error?.message || json?.message || txt || `HTTP ${res.status}`).slice(0, 500);\n    throw new Error(msg);\n  }\n  return json ?? txt;\n}\n\nasync function summarizeVideo(url) {\n  const videoId = extractVideoId(url);\n  if (!videoId) throw new Error('No pude extraer videoId');\n\n  const transcriptPayload = await fetchJson(transcriptApiUrl, {\n    method: 'POST',\n    headers: {\n      'Content-Type': 'application/json',\n      'x-rapidapi-key': transcriptApiKey,\n      ...(transcriptApiHost ? { 'x-rapidapi-host': transcriptApiHost } : {}),\n    },\n    body: JSON.stringify({ video_id: videoId, url }),\n  });\n\n  const transcriptRaw = transcriptFromPayload(transcriptPayload);\n  const transcript = transcriptRaw.replace(/\\s+/g, ' ').trim();\n  if (!transcript) throw new Error('Transcript vacío/no disponible');\n\n  const maxChars = Number(body.max_transcript_chars || 16000);\n  const trimmedTranscript = transcript.slice(0, maxChars);\n\n  const prompt = [\n    'Resume este video de YouTube en español claro y accionable.',\n    'Salida obligatoria:',\n    '1) Resumen ejecutivo (5 bullets)',\n    '2) Ideas clave',\n    '3) Acciones recomendadas (si aplica)',\n    '4) 3 frases para compartir en Twitter/LinkedIn',\n    `URL: ${url}`,\n    '',\n    'TRANSCRIPT:',\n    trimmedTranscript,\n  ].join('\\n');\n\n  const completion = await fetchJson('https://openrouter.ai/api/v1/chat/completions', {\n    method: 'POST',\n    headers: {\n      'Content-Type': 'application/json',\n      'Authorization': `Bearer ${openrouterApiKey}`,\n      'HTTP-Referer': 'https://n8n.local',\n      'X-Title': 'OpenClaw YouTube Summaries',\n    },\n    body: JSON.stringify({\n      model: summaryModel,\n      temperature: 0.2,\n      max_tokens: Number(body.max_tokens || 900),\n      messages: [\n        { role: 'system', content: 'Eres un analista experto en resumen de contenido audiovisual.' },\n        { role: 'user', content: prompt },\n      ],\n    }),\n  });\n\n  const summary = completion?.choices?.[0]?.message?.content || 'Sin resumen';\n  const usage = completion?.usage || {};\n\n  const telegramMessage = [\n    '📺 *Resumen YouTube*',\n    `🔗 ${url}`,\n    '',\n    summary,\n    '',\n    `[pub:openclaw|trigger:n8n] modelo: ${summaryModel}`\n  ].join('\\n');\n\n  await fetchJson(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({\n      chat_id: chatId,\n      text: telegramMessage.slice(0, 3900),\n      parse_mode: 'Markdown',\n      disable_web_page_preview: true,\n    }),\n  });\n\n  try {\n    await fetch(openclawWebhookUrl, {\n      method: 'POST',\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        kind: 'youtube_summary',\n        timestamp: new Date().toISOString(),\n        source: 'n8n',\n        model: summaryModel,\n        file: `youtube-summary-${videoId}.md`,\n        content: summary,\n        meta: { url, videoId, usage },\n      }),\n    });\n  } catch {}\n\n  return {\n    ok: true,\n    url,\n    videoId,\n    model: summaryModel,\n    transcriptChars: trimmedTranscript.length,\n    usage,\n    summary,\n  };\n}\n\nconst results = [];\nfor (const url of urls) {\n  try {\n    const r = await summarizeVideo(url);\n    results.push(r);\n  } catch (error) {\n    const errText = String(error?.message || error);\n    results.push({ ok: false, url, error: errText });\n    try {\n      await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify({\n          chat_id: chatId,\n          text: `❌ No pude resumir ${url}\\nError: ${errText}`,\n          disable_web_page_preview: true,\n        }),\n      });\n    } catch {}\n  }\n}\n\nconst okCount = results.filter((r) => r.ok).length;\nconst failCount = results.length - okCount;\nreturn [{\n  json: {\n    kind: 'youtube_summary_batch',\n    timestamp: new Date().toISOString(),\n    total: results.length,\n    okCount,\n    failCount,\n    results,\n  },\n}];"
+      },
+      "id": "Run_Summary_Flow",
+      "name": "Run Summary Flow (OpenRouter)",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [
+        560,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "fileName": "/data/openclaw/youtube-summaries-log.jsonl",
+        "dataPropertyName": "=JSON.stringify($json)"
+      },
+      "id": "Write_Jsonl",
+      "name": "Write Batch JSONL",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        860,
+        260
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook YouTube Summary": {
+      "main": [
+        [
+          {
+            "node": "Run Summary Flow (OpenRouter)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Summary Flow (OpenRouter)": {
+      "main": [
+        [
+          {
+            "node": "Write Batch JSONL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

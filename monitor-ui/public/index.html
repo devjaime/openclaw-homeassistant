@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Panel OpenClaw + Home Assistant</title>
+  <title>OpenClaw + Home Assistant Monitor</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -149,6 +149,23 @@
     .model-gemini { background: rgba(6,182,212,.2);  color: var(--cyan); }
     .model-minmax { background: rgba(249,115,22,.2); color: var(--orange); }
     .model-other  { background: rgba(148,163,184,.2);color: var(--text2); }
+    .mode-actions { display: flex; gap: 8px; margin-top: 8px; }
+    .mode-btn {
+      border: 1px solid var(--border);
+      background: #111522;
+      color: var(--text);
+      border-radius: 6px;
+      padding: 5px 10px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .mode-btn.active {
+      border-color: rgba(25,181,254,.55);
+      background: rgba(25,181,254,.18);
+      color: #dff6ff;
+    }
+    .mode-btn:disabled { opacity: .6; cursor: default; }
 
     .svc-grid { display: grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 10px; }
     .svc-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--bg3); }
@@ -165,21 +182,119 @@
     .svc-btn.restart { border-color: rgba(245,158,11,.35); color: var(--yellow); }
     .svc-btn.stop { border-color: rgba(239,68,68,.35); color: var(--red); }
     .svc-feedback { margin-top: 8px; font-size: 11px; color: var(--text2); min-height: 14px; }
+    .model-available-list { display: flex; flex-wrap: wrap; gap: 6px; }
+    .model-chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(25,181,254,.12);
+      color: var(--text);
+      font-size: 10px;
+      font-family: var(--font);
+    }
+    .soul-wrap {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: linear-gradient(180deg, rgba(20,37,53,.8), rgba(11,22,32,.8));
+      padding: 12px;
+    }
+    .soul-icons { display: flex; gap: 10px; font-size: 24px; }
+    .soul-icons .brain { animation: brainPulse 2s ease-in-out infinite; }
+    .soul-icons .heart { animation: heartBeat 1.25s ease-in-out infinite; transform-origin: center; }
+    .soul-wrap.alerta .heart { animation-duration: .75s; }
+    .soul-wrap.caido .brain, .soul-wrap.caido .heart { opacity: .35; animation: none; }
+    .soul-text { font-size: 12px; color: var(--text); line-height: 1.6; }
+    @keyframes brainPulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.1); opacity: .75; } }
+    @keyframes heartBeat { 0%,100% { transform: scale(1); } 25% { transform: scale(1.12); } 50% { transform: scale(1); } }
+    .sev {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 700;
+      border: 1px solid transparent;
+    }
+    .sev-critical { color: #fff; background: rgba(239,68,68,.7); border-color: rgba(239,68,68,.95); }
+    .sev-high { color: #ffd9d9; background: rgba(239,68,68,.28); border-color: rgba(239,68,68,.45); }
+    .sev-medium { color: #ffe9b0; background: rgba(245,158,11,.22); border-color: rgba(245,158,11,.45); }
+    .sev-low { color: #d9ecff; background: rgba(59,130,246,.22); border-color: rgba(59,130,246,.45); }
+    .vacuum-layout {
+      display: grid;
+      grid-template-columns: minmax(320px, 1fr) minmax(360px, 1fr);
+      gap: 12px;
+      margin-top: 8px;
+    }
+    .vacuum-map-box {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: rgba(11,22,32,.9);
+      min-height: 250px;
+      overflow: hidden;
+    }
+    .vacuum-map-box img {
+      display: block;
+      width: 100%;
+      height: auto;
+      object-fit: contain;
+      background: #060a10;
+    }
+    .vacuum-map-meta {
+      padding: 10px;
+      color: var(--text2);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .vacuum-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .vacuum-btn {
+      border: 1px solid var(--border);
+      background: var(--bg3);
+      color: var(--text);
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 6px 12px;
+      cursor: pointer;
+    }
+    .vacuum-btn.primary { border-color: rgba(34,197,94,.45); color: var(--green); }
+    .vacuum-btn.warn { border-color: rgba(245,158,11,.45); color: var(--yellow); }
+    .vacuum-btn.danger { border-color: rgba(239,68,68,.45); color: var(--red); }
+    .vacuum-btn.info { border-color: rgba(25,181,254,.45); color: var(--blue); }
+    @media(max-width: 980px) {
+      .vacuum-layout {
+        grid-template-columns: 1fr;
+      }
+    }
   </style>
 </head>
 <body>
   <header class="top">
     <div>
-      <h1><span class="pulse"></span>Panel de Monitoreo</h1>
-      <p>OpenClaw + Home Assistant · actualización cada 30s</p>
+      <h1><span class="pulse"></span><span data-i18n="headerTitle">Panel de Monitoreo</span></h1>
+      <p data-i18n="headerSubtitle">OpenClaw + Home Assistant · actualización cada 30s</p>
     </div>
     <div class="actions">
-      <button id="refreshBtn">↻ Actualizar</button>
-      <button id="resetUsageBtn" title="Resetear contadores de tokens y costos desde ahora">⟲ Reset métricas</button>
-      <button id="refreshUpdateBtn" title="Consultar estado de actualización">⟳ Update</button>
-      <button id="copyGatewayAuthBtn" title="Copia URL + token para OpenClaw Control">🔑 Copiar token</button>
+      <select id="langSelect" style="background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:12px;font-weight:700;">
+        <option value="es">ES</option>
+        <option value="en">EN</option>
+      </select>
+      <button id="refreshBtn" data-i18n="refreshBtn">↻ Actualizar</button>
+      <button id="resetUsageBtn" data-i18n="resetMetricsBtn" data-i18n-title="resetMetricsTitle" title="Resetear contadores de tokens y costos desde ahora">⟲ Reset métricas</button>
+      <button id="refreshUpdateBtn" data-i18n="updateBtn" data-i18n-title="updateTitle" title="Consultar estado de actualización">⟳ Update</button>
+      <button id="copyGatewayAuthBtn" data-i18n="copyTokenBtn" data-i18n-title="copyTokenTitle" title="Copia URL + token para OpenClaw Control">🔑 Copiar token</button>
       <span id="updateStatusPill" class="update-pill">Update: ...</span>
-      <a id="openDashboard" target="_blank" rel="noreferrer">Dashboard OpenClaw</a>
+      <a id="openDashboard" target="_blank" rel="noreferrer" data-i18n="openclawDashboard">Dashboard OpenClaw</a>
+      <a href="/workroom" data-i18n="workroom">Sala de trabajo</a>
       <a href="http://127.0.0.1:8123" target="_blank" rel="noreferrer">Home Assistant</a>
       <a href="http://127.0.0.1:5678" target="_blank" rel="noreferrer">n8n</a>
     </div>
@@ -193,63 +308,124 @@
 
     <!-- Conexiones -->
     <section class="card span2">
-      <h2>Conexiones</h2>
+      <h2 data-i18n="connections">Conexiones</h2>
       <ul id="connections" class="list"></ul>
     </section>
 
     <!-- Modelo -->
     <section class="card span2">
-      <h2>Modelo y Modo</h2>
+      <h2 data-i18n="modelAndMode">Modelo y Modo</h2>
       <div id="modelInfo"></div>
     </section>
 
     <section class="card span4">
-      <h2>Control de Servicios</h2>
+      <h2 data-i18n="serviceControl">Control de Servicios</h2>
       <div id="serviceControls" class="svc-grid"></div>
     </section>
 
     <!-- Última actividad -->
     <section class="card span4" id="lastActivityCard">
-      <h2>Última actividad del agente</h2>
+      <h2 data-i18n="lastAgentActivity">Última actividad del agente</h2>
       <div id="lastActivity"></div>
+    </section>
+
+    <section class="card span4">
+      <h2 data-i18n="agentSoul">Soul del agente</h2>
+      <div id="soulState"></div>
     </section>
 
     <!-- Gráfico diario tokens -->
     <section class="card span2">
-      <h2>Tokens por día (últimos 7 días)</h2>
+      <h2 data-i18n="tokensByDay">Tokens por día (últimos 7 días)</h2>
       <div class="chart-wrap"><canvas id="chartDaily"></canvas></div>
     </section>
 
     <!-- Gráfico por modelo -->
     <section class="card span2">
-      <h2>Distribución por modelo</h2>
+      <h2 data-i18n="modelDistribution">Distribución por modelo</h2>
       <div class="chart-wrap"><canvas id="chartModels"></canvas></div>
     </section>
 
     <!-- Tokens tabla -->
     <section class="card span4">
-      <h2>Tokens y Gasto Estimado</h2>
+      <h2 data-i18n="tokensAndSpend">Tokens y Gasto Estimado</h2>
       <div id="usageSummary" class="kpis"></div>
       <p id="usageResetInfo" class="hint"></p>
       <table>
         <thead>
-          <tr><th>Modelo</th><th>Calls</th><th>Input</th><th>Output</th><th>Total tokens</th><th>USD real</th><th>CLP real</th><th>USD equivalente cloud ☁️</th><th>CLP equivalente ☁️</th><th>Fuente costo</th></tr>
+          <tr><th data-i18n="thModel">Modelo</th><th data-i18n="thCalls">Calls</th><th data-i18n="thInput">Input</th><th data-i18n="thOutput">Output</th><th data-i18n="thTotalTokens">Total tokens</th><th data-i18n="thUsdReal">USD real</th><th data-i18n="thClpReal">CLP real</th><th data-i18n="thUsdEq">USD equivalente cloud ☁️</th><th data-i18n="thClpEq">CLP equivalente ☁️</th><th data-i18n="thCostSource">Fuente costo</th></tr>
         </thead>
         <tbody id="usageModels"></tbody>
       </table>
-      <p class="hint">☁️ Equivalente cloud = costo estimado si se usara GPT-4o-mini ($0,15/$0,60 por 1M tokens) para los modelos locales gratuitos.</p>
+      <p class="hint" data-i18n="cloudEquivalentHint">☁️ Equivalente cloud = costo estimado si se usara GPT-4o-mini ($0,15/$0,60 por 1M tokens) para los modelos locales gratuitos.</p>
     </section>
 
     <section class="card span4">
-      <h2>OpenRouter (desde último reset)</h2>
+      <h2 data-i18n="openrouterSinceReset">OpenRouter (desde último reset)</h2>
       <div id="openrouterSummary" class="kpis"></div>
       <table>
         <thead>
-          <tr><th>Modelo OpenRouter</th><th>Calls</th><th>Input</th><th>Output</th><th>Total tokens</th><th>USD</th><th>CLP</th><th>Fuente costo</th></tr>
+          <tr><th data-i18n="thOpenrouterModel">Modelo OpenRouter</th><th data-i18n="thCalls">Calls</th><th data-i18n="thInput">Input</th><th data-i18n="thOutput">Output</th><th data-i18n="thTotalTokens">Total tokens</th><th>USD</th><th>CLP</th><th data-i18n="thCostSource">Fuente costo</th></tr>
         </thead>
         <tbody id="openrouterModels"></tbody>
       </table>
-      <p class="hint">Incluye gasto externo registrado en ledger para jobs fuera de sesiones estándar.</p>
+      <p class="hint" data-i18n="openrouterLedgerHint">Incluye gasto externo registrado en ledger para jobs fuera de sesiones estándar.</p>
+    </section>
+
+    <section class="card span4">
+      <h2 data-i18n="securitySensitive">Seguridad y accesos sensibles</h2>
+      <div id="securitySummary" class="kpis"></div>
+      <table>
+        <thead>
+          <tr><th data-i18n="thDate">Fecha</th><th data-i18n="thSeverity">Criticidad</th><th data-i18n="thOrigin">Origen</th><th data-i18n="thCategory">Categoría</th><th>Match</th><th data-i18n="thSource">Fuente</th></tr>
+        </thead>
+        <tbody id="sensitiveAccessRows"></tbody>
+      </table>
+    </section>
+
+    <section class="card span4">
+      <h2 data-i18n="promptHistory">Historial de prompts y gatillos</h2>
+      <table>
+        <thead>
+          <tr><th data-i18n="thDate">Fecha</th><th>Trigger</th><th data-i18n="thRole">Rol</th><th>Prompt</th><th data-i18n="thSource">Fuente</th></tr>
+        </thead>
+        <tbody id="promptHistoryRows"></tbody>
+      </table>
+    </section>
+
+    <section class="card span4">
+      <h2 data-i18n="vacuumSection">Aspiradora Xiaomi (mapa y zonas)</h2>
+      <div id="vacuumSummary" class="kpis"></div>
+      <div class="vacuum-layout">
+        <div>
+          <div id="vacuumMapWrap" class="vacuum-map-box"></div>
+          <div id="vacuumActionStatus" class="hint"></div>
+        </div>
+        <div>
+          <div id="vacuumActions" class="vacuum-actions"></div>
+          <h2 style="margin-top:0" data-i18n="vacuumZonesTitle">Zonas / segmentos</h2>
+          <table>
+            <thead>
+              <tr>
+                <th data-i18n="vacuumThSegment">Segmento</th>
+                <th data-i18n="vacuumThRoom">Room ID</th>
+                <th data-i18n="vacuumThName">Nombre</th>
+              </tr>
+            </thead>
+            <tbody id="vacuumZonesRows"></tbody>
+          </table>
+          <h2 style="margin-top:12px" data-i18n="vacuumHistoryTitle">Historial limpieza</h2>
+          <table>
+            <thead>
+              <tr>
+                <th data-i18n="thDate">Fecha</th>
+                <th data-i18n="vacuumThHistoryLabel">Label</th>
+              </tr>
+            </thead>
+            <tbody id="vacuumHistoryRows"></tbody>
+          </table>
+        </div>
+      </div>
     </section>
 
     <section class="card span4">
@@ -262,28 +438,28 @@
         </thead>
         <tbody id="appleDevices"></tbody>
       </table>
-      <h2 style="margin-top:12px">Métricas Apple (sensores)</h2>
+      <h2 style="margin-top:12px" data-i18n="appleMetricsSensors">Métricas Apple (sensores)</h2>
       <table>
         <thead>
-          <tr><th>Sensor</th><th>Valor</th><th>Unidad</th><th>Tipo</th><th>Actualizado</th></tr>
+          <tr><th data-i18n="thSensor">Sensor</th><th data-i18n="thValue">Valor</th><th data-i18n="thUnit">Unidad</th><th data-i18n="thType">Tipo</th><th data-i18n="thUpdated">Actualizado</th></tr>
         </thead>
         <tbody id="appleMetrics"></tbody>
       </table>
       <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <select id="appleNotifyTarget" style="background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px;min-width:260px"></select>
-        <input id="appleNotifyMessage" placeholder="Mensaje para dispositivo Apple..." style="flex:1;min-width:280px;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px" />
-        <button id="appleNotifySend" style="padding:6px 12px;border:none;border-radius:6px;background:var(--blue);color:white;font-weight:700;cursor:pointer">Enviar</button>
+        <input id="appleNotifyMessage" data-i18n-placeholder="appleNotifyPlaceholder" placeholder="Mensaje para dispositivo Apple..." style="flex:1;min-width:280px;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px" />
+        <button id="appleNotifySend" data-i18n="sendBtn" style="padding:6px 12px;border:none;border-radius:6px;background:var(--blue);color:white;font-weight:700;cursor:pointer">Enviar</button>
       </div>
       <div id="appleNotifyStatus" class="hint"></div>
     </section>
 
     <!-- Commits -->
     <section class="card span2">
-      <h2>Commits por Proyecto</h2>
+      <h2 data-i18n="commitsByProject">Commits por Proyecto</h2>
       <div id="projectSummary" class="kpis"></div>
       <table>
         <thead>
-          <tr><th>Proyecto</th><th>24h</th><th>7d</th><th>30d</th><th>Último commit</th></tr>
+          <tr><th data-i18n="thProject">Proyecto</th><th>24h</th><th>7d</th><th>30d</th><th data-i18n="thLastCommit">Último commit</th></tr>
         </thead>
         <tbody id="projects"></tbody>
       </table>
@@ -291,10 +467,10 @@
 
     <!-- Jobs -->
     <section class="card span2">
-      <h2>Jobs / Horarios cron</h2>
+      <h2 data-i18n="jobsCron">Jobs / Horarios cron</h2>
       <table>
         <thead>
-          <tr><th>Nombre</th><th>Expresión</th><th>Próxima ejecución</th><th>Activo</th></tr>
+          <tr><th data-i18n="thName">Nombre</th><th data-i18n="thExpression">Expresión</th><th data-i18n="thNextRun">Próxima ejecución</th><th data-i18n="thActive">Activo</th></tr>
         </thead>
         <tbody id="jobs"></tbody>
       </table>
@@ -302,13 +478,13 @@
 
     <!-- Telegram -->
     <section class="card span2">
-      <h2>Eventos Telegram</h2>
+      <h2 data-i18n="telegramEvents">Eventos Telegram</h2>
       <div id="telegramList" class="tg-list"></div>
     </section>
 
     <!-- Logs con tabs -->
     <section class="card span2">
-      <h2>Logs</h2>
+      <h2 data-i18n="logs">Logs</h2>
       <div class="tabs">
         <div class="tab active" data-tab="openclaw">OpenClaw</div>
         <div class="tab" data-tab="ha">Home Assistant</div>
