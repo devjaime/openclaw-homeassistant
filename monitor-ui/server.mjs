@@ -4,8 +4,9 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execSync } from 'node:child_process';
+import { execSync, exec } from 'node:child_process';
 import net from 'node:net';
+import os from 'node:os';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -39,6 +40,30 @@ const OPENROUTER_CREDITS_URL = process.env.OPENROUTER_CREDITS_URL || 'https://op
 const HA_SECRETS_ENV_PATH = process.env.HA_SECRETS_ENV_PATH || path.join(process.env.HOME || '', '.openclaw', 'secrets.env');
 const MODE_LOCAL_MODEL = process.env.MODE_LOCAL_MODEL || 'custom-127-0-0-1-11434/qwen2.5:7b';
 const MODE_CLOUD_MODEL = process.env.MODE_CLOUD_MODEL || 'openrouter/minimax/minimax-m2.5';
+const RESOURCE_HISTORY_PATH = process.env.RESOURCE_HISTORY_PATH || path.join(process.env.HOME || '', '.openclaw', 'monitor-resource-history.jsonl');
+const RESOURCE_SAMPLE_INTERVAL_MS = Number(process.env.RESOURCE_SAMPLE_INTERVAL_MS || 60000);
+const RESOURCE_RETENTION_DAYS = Number(process.env.RESOURCE_RETENTION_DAYS || 35);
+const RESOURCE_SERIES_MAX_POINTS = Number(process.env.RESOURCE_SERIES_MAX_POINTS || 480);
+
+let lastResourceSampleAtMs = 0;
+let lastResourcePruneAtMs = 0;
+
+// ── Workroom: in-memory agent sessions per desk ──────────────────────────────
+const WORKROOM_DESKS = ['vocari', 'humanloop', 'blog', 'ha'];
+
+const WORKROOM_SESSIONS = {
+  vocari:    { sessionId: 'wr_vocari',    messages: [], busy: false },
+  humanloop: { sessionId: 'wr_humanloop', messages: [], busy: false },
+  blog:      { sessionId: 'wr_blog',      messages: [], busy: false },
+  ha:        { sessionId: 'wr_ha',        messages: [], busy: false },
+};
+
+const WORKROOM_CONTEXT = {
+  vocari:    'You are a senior software engineer dedicated to vocari.cl (orienta-ai vocational platform). Repo: ~/.openclaw/workspace/orienta-ai. Be concise and practical.',
+  humanloop: 'You are a senior software engineer dedicated to humanloop.cl (Airbnb automation + n8n flows). Repo: ~/.openclaw/workspace/humanloop. Be concise and practical.',
+  blog:      'You are a senior software engineer dedicated to jaimehernandez.dev (personal blog, content pipeline). Repo: ~/.openclaw/workspace/projects/devjaimeblog. Be concise and practical.',
+  ha:        'You are a senior home-automation engineer for Home Assistant. Scripts: ~/.openclaw/workspace/projects/homeassistant. Be concise and practical.',
+};
 
 const MODEL_PRICE_PER_TOKEN_USD = {
   'google/gemini-2.5-flash-lite': {
@@ -169,6 +194,305 @@ function runShell(cmd, timeout = 12000) {
       output: [stdout, stderr, String(err?.message || 'command failed')].filter(Boolean).join('\n'),
     };
   }
+}
+
+/** Like runShell but truly async (non-blocking) with extra env vars for safe escaping. */
+function runShellAsync(cmd, extraEnv = {}, timeoutMs = 120000) {
+  return new Promise((resolve) => {
+    exec(cmd, {
+      timeout: timeoutMs,
+      encoding: 'utf8',
+      maxBuffer: 10 * 1024 * 1024,
+      shell: '/bin/bash',
+      env: { ...process.env, PATH: RUNTIME_PATH, ...extraEnv },
+    }, (err, stdout, stderr) => {
+      if (err) {
+        const out = [stdout?.trim(), stderr?.trim(), String(err?.message || 'command failed')]
+          .filter(Boolean).join('\n');
+        resolve({ ok: false, output: out });
+      } else {
+        resolve({ ok: true, output: (stdout || '').trim() });
+      }
+    });
+  });
+}
+
+function parsePercent(text) {
+  const m = String(text || '').match(/([-+]?[0-9]*\.?[0-9]+)\s*%/);
+  return m ? n(m[1]) : 0;
+}
+
+function parseSizeToMb(text) {
+  const m = String(text || '').trim().match(/^([-+]?[0-9]*\.?[0-9]+)\s*([KMGTP]i?)?B?$/i);
+  if (!m) return 0;
+  const value = n(m[1]);
+  const unit = String(m[2] || 'B').toUpperCase();
+  const mul = {
+    B: 1 / (1024 * 1024),
+    K: 1 / 1024,
+    KI: 1 / 1024,
+    M: 1,
+    MI: 1,
+    G: 1024,
+    GI: 1024,
+    T: 1024 * 1024,
+    TI: 1024 * 1024,
+    P: 1024 * 1024 * 1024,
+    PI: 1024 * 1024 * 1024,
+  }[unit] ?? 0;
+  return value * mul;
+}
+
+function findListeningPid(port) {
+  const out = run(`lsof -nP -iTCP:${port} -sTCP:LISTEN -F pc`);
+  if (isErr(out) || !out) return null;
+  const lines = String(out).split('\n').filter(Boolean);
+  let pid = null;
+  let command = '';
+  for (const line of lines) {
+    if (line.startsWith('p')) pid = Number(line.slice(1)) || null;
+    if (line.startsWith('c')) command = line.slice(1);
+  }
+  if (!pid) return null;
+  return { pid, command };
+}
+
+function collectDockerUsage(containerName) {
+  const out = run(`${DOCKER_BIN} stats --no-stream --format '{{json .}}' ${containerName}`);
+  if (isErr(out) || !out) {
+    return {
+      running: dockerIsRunning(containerName),
+      container: containerName,
+      cpuPct: 0,
+      ramPct: 0,
+      ramMb: 0,
+      pids: 0,
+      source: 'docker',
+    };
+  }
+  const row = safeJsonParse(String(out).split('\n').find(Boolean) || '', null);
+  if (!row || typeof row !== 'object') {
+    return {
+      running: dockerIsRunning(containerName),
+      container: containerName,
+      cpuPct: 0,
+      ramPct: 0,
+      ramMb: 0,
+      pids: 0,
+      source: 'docker',
+    };
+  }
+  const memUsageRaw = String(row.MemUsage || '');
+  const memUsedPart = memUsageRaw.split('/')[0]?.trim() || '';
+  return {
+    running: true,
+    container: containerName,
+    cpuPct: parsePercent(row.CPUPerc),
+    ramPct: parsePercent(row.MemPerc),
+    ramMb: parseSizeToMb(memUsedPart),
+    pids: n(row.PIDs),
+    source: 'docker',
+  };
+}
+
+function parseEtimeToSec(value) {
+  const s = String(value || '').trim();
+  if (!s) return 0;
+  const daySplit = s.split('-');
+  let days = 0;
+  let timePart = s;
+  if (daySplit.length === 2) {
+    days = n(daySplit[0]);
+    timePart = daySplit[1];
+  }
+  const parts = timePart.split(':').map((x) => n(x));
+  if (parts.length === 3) return days * 86400 + parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return days * 86400 + parts[0] * 60 + parts[1];
+  if (parts.length === 1) return days * 86400 + parts[0];
+  return 0;
+}
+
+function collectResourceUsage(runtimePort) {
+  const totalMemBytes = os.totalmem();
+  const freeMemBytes = os.freemem();
+  const usedMemBytes = Math.max(0, totalMemBytes - freeMemBytes);
+  const host = {
+    ramTotalMb: Math.round(totalMemBytes / (1024 * 1024)),
+    ramUsedMb: Math.round(usedMemBytes / (1024 * 1024)),
+    ramFreeMb: Math.round(freeMemBytes / (1024 * 1024)),
+    ramUsedPct: totalMemBytes > 0 ? (usedMemBytes / totalMemBytes) * 100 : 0,
+    loadAvg1m: n(os.loadavg()?.[0]),
+    cpuCount: n(os.cpus()?.length),
+  };
+
+  const openclaw = {
+    running: false,
+    pid: null,
+    command: '',
+    cpuPct: 0,
+    rssKb: 0,
+    rssMb: 0,
+    ramHostPct: 0,
+    etimeSec: 0,
+  };
+
+  const listener = findListeningPid(runtimePort);
+  if (!listener?.pid) {
+    return {
+      host,
+      services: {
+        openclaw,
+        homeassistant: collectDockerUsage('homeassistant'),
+        n8n: collectDockerUsage('n8n'),
+      },
+    };
+  }
+
+  const ps = run(`ps -p ${listener.pid} -o %cpu=,rss=,etime=,comm=`);
+  if (isErr(ps) || !ps) {
+    return {
+      host,
+      services: {
+        openclaw: {
+          ...openclaw,
+          running: true,
+          pid: listener.pid,
+          command: listener.command || '',
+        },
+        homeassistant: collectDockerUsage('homeassistant'),
+        n8n: collectDockerUsage('n8n'),
+      },
+    };
+  }
+
+  const line = String(ps).trim();
+  const m = line.match(/^([0-9.]+)\s+([0-9]+)\s+([0-9:-]+)\s+(.+)$/);
+  const cpuPct = m ? n(m[1]) : 0;
+  const rssKb = m ? n(m[2]) : 0;
+  const etimeRaw = m ? String(m[3]) : '';
+  const etimeSec = parseEtimeToSec(etimeRaw);
+  const command = m ? String(m[4] || '') : (listener.command || '');
+  const rssBytes = rssKb * 1024;
+  return {
+    host,
+    services: {
+      openclaw: {
+        running: true,
+        pid: listener.pid,
+        command,
+        cpuPct,
+        rssKb,
+        ramMb: rssKb / 1024,
+        ramPct: totalMemBytes > 0 ? (rssBytes / totalMemBytes) * 100 : 0,
+        etimeSec,
+        source: 'process',
+      },
+      homeassistant: collectDockerUsage('homeassistant'),
+      n8n: collectDockerUsage('n8n'),
+    },
+  };
+}
+
+async function readResourceHistory() {
+  try {
+    if (!fs.existsSync(RESOURCE_HISTORY_PATH)) return [];
+    const raw = await fsp.readFile(RESOURCE_HISTORY_PATH, 'utf8');
+    return raw.split('\n')
+      .filter(Boolean)
+      .map((line) => safeJsonParse(line, null))
+      .filter((row) => row && typeof row === 'object' && n(row.ts) > 0);
+  } catch {
+    return [];
+  }
+}
+
+async function writeResourceSample(resources) {
+  const now = Date.now();
+  if (now - lastResourceSampleAtMs < RESOURCE_SAMPLE_INTERVAL_MS) return;
+  lastResourceSampleAtMs = now;
+  const payload = {
+    ts: now,
+    openclaw: {
+      cpuPct: n(resources?.services?.openclaw?.cpuPct),
+      ramPct: n(resources?.services?.openclaw?.ramPct),
+      ramMb: n(resources?.services?.openclaw?.ramMb),
+      running: Boolean(resources?.services?.openclaw?.running),
+    },
+    homeassistant: {
+      cpuPct: n(resources?.services?.homeassistant?.cpuPct),
+      ramPct: n(resources?.services?.homeassistant?.ramPct),
+      ramMb: n(resources?.services?.homeassistant?.ramMb),
+      running: Boolean(resources?.services?.homeassistant?.running),
+    },
+    n8n: {
+      cpuPct: n(resources?.services?.n8n?.cpuPct),
+      ramPct: n(resources?.services?.n8n?.ramPct),
+      ramMb: n(resources?.services?.n8n?.ramMb),
+      running: Boolean(resources?.services?.n8n?.running),
+    },
+  };
+  await fsp.appendFile(RESOURCE_HISTORY_PATH, `${JSON.stringify(payload)}\n`, 'utf8');
+}
+
+async function pruneResourceHistory(nowMs = Date.now()) {
+  if (nowMs - lastResourcePruneAtMs < 6 * 60 * 60 * 1000) return;
+  lastResourcePruneAtMs = nowMs;
+  try {
+    if (!fs.existsSync(RESOURCE_HISTORY_PATH)) return;
+    const minTs = nowMs - RESOURCE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    const rows = await readResourceHistory();
+    const kept = rows.filter((row) => n(row.ts) >= minTs);
+    const output = kept.map((row) => JSON.stringify(row)).join('\n');
+    await fsp.writeFile(RESOURCE_HISTORY_PATH, output ? `${output}\n` : '', 'utf8');
+  } catch {}
+}
+
+function summarizeResourceHistory(rows, nowMs = Date.now()) {
+  const windows = {
+    day: 24 * 60 * 60 * 1000,
+    days7: 7 * 24 * 60 * 60 * 1000,
+    days30: 30 * 24 * 60 * 60 * 1000,
+  };
+  const services = ['openclaw', 'homeassistant', 'n8n'];
+  const peaks = {};
+
+  for (const svc of services) {
+    peaks[svc] = {};
+    for (const [windowKey, windowMs] of Object.entries(windows)) {
+      let cpu = { value: 0, ts: null };
+      let ram = { value: 0, ts: null };
+      const minTs = nowMs - windowMs;
+      for (const row of rows) {
+        const ts = n(row.ts);
+        if (ts < minTs) continue;
+        const cpuPct = n(row?.[svc]?.cpuPct);
+        const ramPct = n(row?.[svc]?.ramPct);
+        if (cpuPct > cpu.value) cpu = { value: cpuPct, ts };
+        if (ramPct > ram.value) ram = { value: ramPct, ts };
+      }
+      peaks[svc][windowKey] = { cpu, ram };
+    }
+  }
+
+  const oneDayMinTs = nowMs - windows.day;
+  const dayRows = rows.filter((row) => n(row.ts) >= oneDayMinTs);
+  const stride = dayRows.length > RESOURCE_SERIES_MAX_POINTS
+    ? Math.ceil(dayRows.length / RESOURCE_SERIES_MAX_POINTS)
+    : 1;
+  const series24h = dayRows
+    .filter((_, idx) => idx % stride === 0)
+    .map((row) => ({
+      ts: n(row.ts),
+      openclaw: row.openclaw || {},
+      homeassistant: row.homeassistant || {},
+      n8n: row.n8n || {},
+    }));
+
+  return {
+    peaks,
+    series24h,
+    totalSamples: rows.length,
+  };
 }
 
 function extractTrailingJsonObject(raw) {
@@ -1196,6 +1520,11 @@ async function buildStatus() {
       : modelPrimary.includes('qwen') || modelPrimary.includes('custom-127-0-0-1-11434')
         ? 'noche/local (ollama)'
         : 'custom';
+  const resources = collectResourceUsage(runtimePort);
+  await writeResourceSample(resources);
+  await pruneResourceHistory();
+  const resourceRows = await readResourceHistory();
+  const resourceStats = summarizeResourceHistory(resourceRows);
 
   const services = {
     openclaw: {
@@ -1255,6 +1584,12 @@ async function buildStatus() {
       cronJobs: cron.jobs || [],
       cronOk: Boolean(cron.ok),
       cronError: cron.error || null,
+    },
+    resources: {
+      ...resources,
+      peaks: resourceStats.peaks,
+      series24h: resourceStats.series24h,
+      totalSamples: resourceStats.totalSamples,
     },
     usage: usageStats,
     security,
@@ -1395,6 +1730,41 @@ async function performServiceAction(service, action, cfg) {
     message: `${container} ${action} ejecutado`,
     running,
   };
+}
+
+// ── Workroom agent dispatcher ─────────────────────────────────────────────────
+async function dispatchAgentMessage(deskId, userMessage) {
+  const session = WORKROOM_SESSIONS[deskId];
+  const isFirst = session.messages.filter((m) => m.role === 'user').length <= 1;
+  const fullMessage = isFirst
+    ? `[CONTEXT: ${WORKROOM_CONTEXT[deskId]}]\n\n${userMessage}`
+    : userMessage;
+
+  try {
+    const out = await runShellAsync(
+      `"${OPENCLAW_BIN}" agent --session-id ${session.sessionId} --message "$WR_MSG" --json`,
+      { WR_MSG: fullMessage },
+      120000,
+    );
+    if (out.ok) {
+      const parsed = extractTrailingJsonObject(out.output);
+      // gateway mode:   { result: { payloads: [{ text: "..." }] } }
+      // embedded mode:  { payloads: [{ text: "..." }], meta: {...} }
+      const reply = String(
+        parsed?.result?.payloads?.[0]?.text ||
+        parsed?.payloads?.[0]?.text ||
+        parsed?.reply || parsed?.response || parsed?.text ||
+        out.output || '(sin respuesta)'
+      );
+      session.messages.push({ role: 'agent', text: reply, ts: Date.now() });
+    } else {
+      session.messages.push({ role: 'error', text: out.output || 'Error desconocido', ts: Date.now() });
+    }
+  } catch (e) {
+    session.messages.push({ role: 'error', text: String(e?.message || e), ts: Date.now() });
+  } finally {
+    session.busy = false;
+  }
 }
 
 const server = http.createServer(async (req, res) => {
@@ -1604,6 +1974,61 @@ const server = http.createServer(async (req, res) => {
     }
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ ok: true, message: `Acción ${action} enviada` }));
+    return;
+  }
+
+  // ── Workroom API ──────────────────────────────────────────────────────────
+  if (u.pathname === '/api/workroom/send' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const deskId = String(body?.deskId || '').trim().toLowerCase();
+    const message = String(body?.message || '').trim();
+
+    if (!WORKROOM_DESKS.includes(deskId) || !message) {
+      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, message: 'deskId o mensaje inválido' }));
+      return;
+    }
+    const session = WORKROOM_SESSIONS[deskId];
+    if (session.busy) {
+      res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, busy: true, message: 'Agente ocupado, espera la respuesta anterior.' }));
+      return;
+    }
+    session.messages.push({ role: 'user', text: message, ts: Date.now() });
+    session.busy = true;
+    // Dispatch without awaiting so HTTP response returns immediately
+    dispatchAgentMessage(deskId, message).catch(() => {});
+    res.writeHead(202, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: true, pending: true }));
+    return;
+  }
+
+  if (u.pathname === '/api/workroom/history' && req.method === 'GET') {
+    const payload = {};
+    for (const id of WORKROOM_DESKS) {
+      const s = WORKROOM_SESSIONS[id];
+      payload[id] = { messages: s.messages, busy: s.busy, sessionId: s.sessionId };
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify(payload));
+    return;
+  }
+
+  if (u.pathname === '/api/workroom/clear' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const deskId = String(body?.deskId || '').trim().toLowerCase();
+    if (!WORKROOM_DESKS.includes(deskId)) {
+      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, message: 'deskId inválido' }));
+      return;
+    }
+    const session = WORKROOM_SESSIONS[deskId];
+    session.messages = [];
+    session.busy = false;
+    // New session ID so the next message starts a fresh agent context
+    session.sessionId = `wr_${deskId}_${Date.now()}`;
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: true }));
     return;
   }
 

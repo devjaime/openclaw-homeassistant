@@ -319,6 +319,25 @@
     </section>
 
     <section class="card span4">
+      <h2 data-i18n="resourceUsage">Uso de recursos por servicio</h2>
+      <div id="resourceSummary" class="kpis"></div>
+      <div class="chart-wrap"><canvas id="chartResources"></canvas></div>
+      <h2 style="margin-top:12px" data-i18n="resourcePeaksTitle">Picos de consumo (24h / 7d / 30d)</h2>
+      <table>
+        <thead>
+          <tr>
+            <th data-i18n="resourceThService">Servicio</th>
+            <th data-i18n="resourceThMetric">Métrica</th>
+            <th data-i18n="resourceTh24h">24h</th>
+            <th data-i18n="resourceTh7d">7d</th>
+            <th data-i18n="resourceTh30d">30d</th>
+          </tr>
+        </thead>
+        <tbody id="resourcePeaksRows"></tbody>
+      </table>
+    </section>
+
+    <section class="card span4">
       <h2 data-i18n="serviceControl">Control de Servicios</h2>
       <div id="serviceControls" class="svc-grid"></div>
     </section>

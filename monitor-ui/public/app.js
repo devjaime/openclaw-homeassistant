@@ -168,6 +168,28 @@ const I18N = {
     appleSensors: 'Sensores Apple',
     notifyChannelsAvailable: 'Canales notify disponibles',
     integrationStatus: 'Estado integración',
+    resourceUsage: 'Uso de recursos por servicio',
+    resourcePeaksTitle: 'Picos de consumo (24h / 7d / 30d)',
+    serviceOpenclaw: 'OpenClaw',
+    serviceHomeassistant: 'Home Assistant',
+    serviceN8n: 'n8n',
+    metricCpu: 'CPU %',
+    metricRam: 'RAM %',
+    resourceThService: 'Servicio',
+    resourceThMetric: 'Métrica',
+    resourceTh24h: '24h',
+    resourceTh7d: '7d',
+    resourceTh30d: '30d',
+    cpuProcess: 'CPU proceso',
+    ramProcess: 'RAM proceso',
+    ramProcessPct: 'RAM proceso % host',
+    processPid: 'PID',
+    processUptime: 'Uptime proceso',
+    hostRamUsage: 'RAM host usada',
+    loadAvg1m: 'Load avg 1m',
+    chartCpu: 'CPU %',
+    chartRam: 'RAM MB',
+    chartRamPct: 'RAM % host',
     vacuumSection: 'Aspiradora Xiaomi (mapa y zonas)',
     vacuumNotFound: 'No se encontró ninguna entidad vacuum.* en Home Assistant.',
     vacuumEntity: 'Entidad',
@@ -366,6 +388,28 @@ const I18N = {
     appleSensors: 'Apple sensors',
     notifyChannelsAvailable: 'Available notify channels',
     integrationStatus: 'Integration status',
+    resourceUsage: 'Per-service resource usage',
+    resourcePeaksTitle: 'Peak usage (24h / 7d / 30d)',
+    serviceOpenclaw: 'OpenClaw',
+    serviceHomeassistant: 'Home Assistant',
+    serviceN8n: 'n8n',
+    metricCpu: 'CPU %',
+    metricRam: 'RAM %',
+    resourceThService: 'Service',
+    resourceThMetric: 'Metric',
+    resourceTh24h: '24h',
+    resourceTh7d: '7d',
+    resourceTh30d: '30d',
+    cpuProcess: 'Process CPU',
+    ramProcess: 'Process RAM',
+    ramProcessPct: 'Process RAM % host',
+    processPid: 'PID',
+    processUptime: 'Process uptime',
+    hostRamUsage: 'Host RAM used',
+    loadAvg1m: 'Load avg 1m',
+    chartCpu: 'CPU %',
+    chartRam: 'RAM MB',
+    chartRamPct: 'RAM % host',
     vacuumSection: 'Xiaomi vacuum (map and zones)',
     vacuumNotFound: 'No vacuum.* entity found in Home Assistant.',
     vacuumEntity: 'Entity',
@@ -562,6 +606,7 @@ const chartOptions = (title) => ({
 
 let chartDaily = null;
 let chartModels = null;
+let chartResources = null;
 
 function resolveModeType(data) {
   const mode = String(data?.openclaw?.modelModeGuess || '').toLowerCase();
@@ -718,6 +763,197 @@ function updateCharts(usageData) {
       },
     });
   }
+}
+
+function formatDurationSec(totalSec) {
+  const sec = Math.max(0, Math.floor(n(totalSec)));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function renderResources(data) {
+  const resources = data?.resources || {};
+  const host = resources?.host || {};
+  const services = resources?.services || {};
+  const oc = services?.openclaw || {};
+  const haSvc = services?.homeassistant || {};
+  const n8nSvc = services?.n8n || {};
+  const summary = document.getElementById('resourceSummary');
+  if (!summary) return;
+
+  const serviceLabel = {
+    openclaw: t('serviceOpenclaw'),
+    homeassistant: t('serviceHomeassistant'),
+    n8n: t('serviceN8n'),
+  };
+
+  summary.innerHTML = [
+    { label: `${t('serviceOpenclaw')} ${t('metricCpu')}`, value: `${n(oc.cpuPct).toFixed(1)}%`, className: n(oc.cpuPct) > 85 ? 'bad' : (n(oc.cpuPct) > 60 ? 'warn' : 'ok') },
+    { label: `${t('serviceOpenclaw')} ${t('metricRam')}`, value: `${n(oc.ramPct).toFixed(2)}%`, className: n(oc.ramPct) > 20 ? 'warn' : 'ok' },
+    { label: `${t('serviceHomeassistant')} ${t('metricCpu')}`, value: `${n(haSvc.cpuPct).toFixed(1)}%`, className: n(haSvc.cpuPct) > 85 ? 'bad' : (n(haSvc.cpuPct) > 60 ? 'warn' : 'ok') },
+    { label: `${t('serviceHomeassistant')} ${t('metricRam')}`, value: `${n(haSvc.ramPct).toFixed(2)}%`, className: n(haSvc.ramPct) > 25 ? 'warn' : 'ok' },
+    { label: `${t('serviceN8n')} ${t('metricCpu')}`, value: `${n(n8nSvc.cpuPct).toFixed(1)}%`, className: n(n8nSvc.cpuPct) > 85 ? 'bad' : (n(n8nSvc.cpuPct) > 60 ? 'warn' : 'ok') },
+    { label: `${t('serviceN8n')} ${t('metricRam')}`, value: `${n(n8nSvc.ramPct).toFixed(2)}%`, className: n(n8nSvc.ramPct) > 25 ? 'warn' : 'ok' },
+    { label: `${t('serviceOpenclaw')} MB`, value: `${n(oc.ramMb).toFixed(1)} MB`, className: 'info' },
+    { label: `${t('serviceHomeassistant')} MB`, value: `${n(haSvc.ramMb).toFixed(1)} MB`, className: 'info' },
+    { label: `${t('serviceN8n')} MB`, value: `${n(n8nSvc.ramMb).toFixed(1)} MB`, className: 'info' },
+    { label: t('processPid'), value: oc.running ? String(oc.pid || '-') : '-', className: oc.running ? 'ok' : 'bad' },
+    { label: t('processUptime'), value: formatDurationSec(oc.etimeSec), className: 'info' },
+    { label: t('hostRamUsage'), value: `${fmtNum(host.ramUsedMb)} / ${fmtNum(host.ramTotalMb)} MB (${n(host.ramUsedPct).toFixed(1)}%)`, className: n(host.ramUsedPct) > 88 ? 'warn' : 'ok' },
+    { label: t('loadAvg1m'), value: `${n(host.loadAvg1m).toFixed(2)} / ${fmtNum(host.cpuCount)} CPU`, className: n(host.loadAvg1m) > n(host.cpuCount) ? 'warn' : 'ok' },
+  ].map((k) =>
+    `<div class="kpi"><div class="label">${k.label}</div><div class="value ${k.className}" style="font-size:14px">${esc(k.value)}</div></div>`
+  ).join('');
+
+  const ctx = document.getElementById('chartResources');
+  const peaksBody = document.getElementById('resourcePeaksRows');
+  const series = Array.isArray(resources?.series24h) ? resources.series24h : [];
+  if (peaksBody) {
+    const peaks = resources?.peaks || {};
+    const windowKeys = ['day', 'days7', 'days30'];
+    const servicesOrder = ['openclaw', 'homeassistant', 'n8n'];
+    const rows = [];
+
+    const peakCell = (entry) => {
+      const value = n(entry?.value);
+      const ts = n(entry?.ts);
+      if (!value) return '—';
+      const when = ts ? new Date(ts).toLocaleString(getLocale(), { dateStyle: 'short', timeStyle: 'short' }) : '-';
+      return `${value.toFixed(2)}%<br><span style="font-size:10px;color:var(--text2)">${when}</span>`;
+    };
+
+    for (const svc of servicesOrder) {
+      for (const metric of ['cpu', 'ram']) {
+        rows.push({
+          service: serviceLabel[svc] || svc,
+          metric: metric === 'cpu' ? t('metricCpu') : t('metricRam'),
+          values: windowKeys.map((wk) => peaks?.[svc]?.[wk]?.[metric] || null),
+        });
+      }
+    }
+
+    peaksBody.innerHTML = rows.map((row) => `
+      <tr>
+        <td>${esc(row.service)}</td>
+        <td>${esc(row.metric)}</td>
+        <td>${peakCell(row.values[0])}</td>
+        <td>${peakCell(row.values[1])}</td>
+        <td>${peakCell(row.values[2])}</td>
+      </tr>
+    `).join('');
+  }
+
+  if (!ctx || typeof Chart === 'undefined') return;
+
+  const labels = series.map((row) => {
+    const ts = n(row.ts);
+    return ts ? new Date(ts).toLocaleTimeString(getLocale(), { hour12: false }) : '';
+  });
+
+  const chartData = {
+    labels,
+    datasets: [
+      {
+        label: `${t('serviceOpenclaw')} ${t('metricCpu')}`,
+        data: series.map((row) => n(row?.openclaw?.cpuPct)),
+        borderColor: 'rgba(25,181,254,0.95)',
+        backgroundColor: 'rgba(25,181,254,0.18)',
+        yAxisID: 'y',
+        tension: 0.28,
+        fill: false,
+        pointRadius: 0,
+      },
+      {
+        label: `${t('serviceOpenclaw')} ${t('metricRam')}`,
+        data: series.map((row) => n(row?.openclaw?.ramPct)),
+        borderColor: 'rgba(45,212,191,0.95)',
+        backgroundColor: 'rgba(45,212,191,0.12)',
+        yAxisID: 'y',
+        tension: 0.28,
+        fill: false,
+        pointRadius: 0,
+        borderDash: [6, 4],
+      },
+      {
+        label: `${t('serviceHomeassistant')} ${t('metricCpu')}`,
+        data: series.map((row) => n(row?.homeassistant?.cpuPct)),
+        borderColor: 'rgba(249,115,22,0.95)',
+        backgroundColor: 'rgba(249,115,22,0.15)',
+        yAxisID: 'y',
+        tension: 0.28,
+        fill: false,
+        pointRadius: 0,
+      },
+      {
+        label: `${t('serviceHomeassistant')} ${t('metricRam')}`,
+        data: series.map((row) => n(row?.homeassistant?.ramPct)),
+        borderColor: 'rgba(245,158,11,0.95)',
+        backgroundColor: 'rgba(245,158,11,0.15)',
+        yAxisID: 'y',
+        tension: 0.28,
+        fill: false,
+        pointRadius: 0,
+        borderDash: [6, 4],
+      },
+      {
+        label: `${t('serviceN8n')} ${t('metricCpu')}`,
+        data: series.map((row) => n(row?.n8n?.cpuPct)),
+        borderColor: 'rgba(167,139,250,0.95)',
+        backgroundColor: 'rgba(167,139,250,0.15)',
+        yAxisID: 'y',
+        tension: 0.28,
+        fill: false,
+        pointRadius: 0,
+      },
+      {
+        label: `${t('serviceN8n')} ${t('metricRam')}`,
+        data: series.map((row) => n(row?.n8n?.ramPct)),
+        borderColor: 'rgba(34,197,94,0.95)',
+        backgroundColor: 'rgba(34,197,94,0.15)',
+        yAxisID: 'y',
+        tension: 0.28,
+        fill: false,
+        pointRadius: 0,
+        borderDash: [6, 4],
+      },
+    ],
+  };
+
+  if (chartResources) {
+    chartResources.data = chartData;
+    chartResources.update();
+    return;
+  }
+
+  chartResources = new Chart(ctx, {
+    type: 'line',
+    data: chartData,
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 550, easing: 'easeOutQuart' },
+      plugins: {
+        legend: { labels: { color: '#94a3b8', font: { size: 11 } } },
+      },
+      scales: {
+        x: {
+          ticks: { color: '#94a3b8', font: { size: 10 }, maxTicksLimit: 12 },
+          grid: { color: 'rgba(255,255,255,.05)' },
+        },
+        y: {
+          position: 'left',
+          suggestedMin: 0,
+          suggestedMax: 100,
+          ticks: { color: '#94a3b8', callback: (v) => `${v}%` },
+          grid: { color: 'rgba(255,255,255,.05)' },
+        },
+      },
+    },
+  });
 }
 
 // ── sections ──────────────────────────────────────────────────────────────────
@@ -1467,6 +1703,7 @@ async function load() {
     renderSummary(data);
     renderConnections(data);
     renderModel(data);
+    renderResources(data);
     renderServiceControls(data);
     renderJobs(data);
     renderUsage(data);
