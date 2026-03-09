@@ -693,3 +693,53 @@ pre.log {
 /* Model picker in Settings */
 #model-picker-section select { max-width: 420px; }
 #model-set-status { font-size: 12px; color: var(--color-text-muted); margin-top: 6px; min-height: 18px; }
+
+/* ── Autonomous agent ──────────────────────────────────────────────────────── */
+.auto-step {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  font-size: 13px;
+  animation: fadeSlideUp 200ms ease-out both;
+  background: var(--color-surface);
+}
+.auto-step-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.auto-step-phase { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
+.auto-step-n { font-size: 11px; color: var(--color-text-subtle); }
+.auto-step-ts { font-size: 10px; color: var(--color-text-subtle); margin-left: auto; }
+.auto-step-body { font-size: 12.5px; color: var(--color-text-muted); white-space: pre-wrap; word-break: break-word; }
+.auto-step-reasoning { font-size: 11.5px; color: var(--color-text-subtle); margin-top: 4px; font-style: italic; }
+
+/* Phase accent borders */
+.auto-step.thinking  { border-left: 3px solid var(--color-accent); }
+.auto-step.verifying { border-left: 3px solid #f59e0b; }
+.auto-step.blocked   { border-left: 3px solid var(--color-destructive); }
+.auto-step.executing { border-left: 3px solid #38bdf8; }
+.auto-step.result    { border-left: 3px solid var(--color-success); }
+.auto-step.result.fail { border-left-color: var(--color-destructive); }
+
+/* Status badge states for autonomous */
+#auto-status-badge { transition: background 0.3s, color 0.3s; }
+#auto-status-badge.running   { background: var(--color-accent-muted); color: var(--color-accent); }
+#auto-status-badge.thinking  { background: var(--color-accent-muted); color: var(--color-accent); }
+#auto-status-badge.verifying { background: #451a03; color: #f59e0b; }
+#auto-status-badge.executing { background: #0c1a2e; color: #38bdf8; }
+#auto-status-badge.completed { background: var(--color-success-muted,#14290e); color: var(--color-success,#4ade80); }
+#auto-status-badge.error     { background: var(--color-destructive-muted,#2d0a0a); color: var(--color-destructive,#f87171); }
+#auto-status-badge.paused    { background: #2d2200; color: #f59e0b; }
+
+/* Textarea in autonomous section */
+#section-autonomous textarea {
+  width: 100%;
+  background: var(--color-input,var(--color-surface-elevated));
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  padding: 10px 12px;
+  font-size: 13px;
+  resize: vertical;
+  min-height: 72px;
+  font-family: var(--font-sans);
+  line-height: 1.5;
+}
+#section-autonomous select, #section-autonomous input[type="range"] { width: 100%; }

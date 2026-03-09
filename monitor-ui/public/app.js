@@ -28,6 +28,7 @@ function navigateTo(sectionId) {
     if (titleEl) titleEl.textContent = SECTION_TITLES[sectionId] || sectionId;
     if (sectionId === 'crons') fetchCrons();
     if (sectionId === 'audit') fetchAuditLog();
+    if (sectionId === 'autonomous') { fetchAutoHistory(); fetchAutoStatus(); }
     closeSidebar();
   };
   if (document.startViewTransition) {
@@ -2280,3 +2281,232 @@ load();
 refreshUpdateStatus();
 setInterval(load, 30000);
 setInterval(refreshUpdateStatus, 60000);
+
+// ── Autonomous Agent ─────────────────────────────────────────────────────────
+let _autoSessionId = null;
+let _autoSSE = null;
+
+function autoSetButtons(running) {
+  const start = document.getElementById('auto-start-btn');
+  const pause = document.getElementById('auto-pause-btn');
+  const stop  = document.getElementById('auto-stop-btn');
+  if (start) start.disabled = running;
+  if (pause) { pause.disabled = !running; }
+  if (stop)  { stop.disabled  = !running; }
+}
+
+function updateAutoStatusBadge(status) {
+  const badge = document.getElementById('auto-status-badge');
+  if (!badge) return;
+  const MAP = {
+    idle: 'idle', running: 'pensando…', thinking: 'pensando…',
+    verifying: 'verificando…', executing: 'ejecutando…',
+    paused: 'pausado', completed: '✓ completado', error: '✗ error',
+  };
+  badge.textContent = MAP[status] || status;
+  badge.className = `badge ${status}`;
+}
+
+async function autoStart() {
+  const goal = (document.getElementById('auto-goal')?.value || '').trim();
+  if (!goal) { showToast('Ingresa un objetivo para el agente', 'error'); return; }
+  const model = document.getElementById('auto-model-select')?.value || 'openrouter/minimax/minimax-m2.5';
+  const maxIterations = Number(document.getElementById('auto-iterations')?.value || 15);
+  const riskLevel = document.getElementById('auto-risk-level')?.value || 'MEDIUM';
+  try {
+    const res = await apiFetch('/api/autonomous/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ goal, model, maxIterations, riskLevel }),
+    });
+    const data = await res.json();
+    if (!data.ok) { showToast(data.message || 'Error al iniciar', 'error'); return; }
+    _autoSessionId = data.sessionId;
+    autoSetButtons(true);
+    updateAutoStatusBadge('running');
+    clearAutoLog();
+    connectAutoSSE(_autoSessionId);
+    const hint = document.getElementById('auto-verifier-hint');
+    if (hint) hint.textContent = `Verificador: ${data.verifierModel}`;
+    showToast('Agente autónomo iniciado', 'success');
+  } catch (e) {
+    showToast('Error de red al iniciar agente', 'error');
+  }
+}
+
+async function autoStop() {
+  if (!_autoSessionId) return;
+  try {
+    await apiFetch('/api/autonomous/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: _autoSessionId }),
+    });
+    disconnectAutoSSE();
+    autoSetButtons(false);
+    updateAutoStatusBadge('error');
+    showToast('Agente detenido', 'info');
+  } catch { showToast('Error al detener agente', 'error'); }
+}
+
+async function autoPause() {
+  if (!_autoSessionId) return;
+  try {
+    await apiFetch('/api/autonomous/pause', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: _autoSessionId }),
+    });
+    updateAutoStatusBadge('paused');
+    showToast('Agente en pausa (reanudará en el próximo ciclo)', 'info');
+  } catch { showToast('Error al pausar', 'error'); }
+}
+
+function connectAutoSSE(sessionId) {
+  if (_autoSSE) _autoSSE.close();
+  const token = window.DASHBOARD_TOKEN || localStorage.getItem('dashboard_token') || '';
+  const url = `/api/autonomous/stream?sessionId=${encodeURIComponent(sessionId)}${token ? '&token='+encodeURIComponent(token) : ''}`;
+  _autoSSE = new EventSource(url);
+  _autoSSE.onmessage = (e) => {
+    try {
+      const event = JSON.parse(e.data);
+      if (event.type === 'step') renderAutoStep(event);
+      else if (event.type === 'status') {
+        updateAutoStatusBadge(event.status);
+        if (event.status === 'completed' || event.status === 'error') {
+          autoSetButtons(false);
+          disconnectAutoSSE();
+          fetchAutoHistory();
+        }
+      }
+    } catch {}
+  };
+  _autoSSE.onerror = () => disconnectAutoSSE();
+}
+
+function disconnectAutoSSE() {
+  if (_autoSSE) { _autoSSE.close(); _autoSSE = null; }
+}
+
+function clearAutoLog() {
+  const log = document.getElementById('auto-step-log');
+  if (log) log.innerHTML = '<div style="color:var(--color-text-subtle);font-size:12px;padding:16px;text-align:center">Sin pasos aún</div>';
+}
+
+function renderAutoStep(event) {
+  const log = document.getElementById('auto-step-log');
+  if (!log) return;
+  // Remove placeholder
+  const placeholder = log.querySelector('div[style*="text-align:center"]');
+  if (placeholder) placeholder.remove();
+
+  const phase = event.phase || 'result';
+  const stepN = event.stepN || event.step_n || '?';
+  const ts = event.ts ? new Date(event.ts).toLocaleTimeString('es-CL') : '';
+  const content = event.content || {};
+
+  let bodyHtml = '';
+  if (phase === 'thinking') {
+    const action = typeof content === 'object' ? content : {};
+    bodyHtml = `<div class="auto-step-body"><strong>Acción:</strong> ${escHtml(action.type || '')} ${action.query ? `— ${escHtml(String(action.query))}` : ''} ${action.message ? `— ${escHtml(String(action.message).slice(0,120))}` : ''}</div>`;
+    if (action.reasoning) bodyHtml += `<div class="auto-step-reasoning">${escHtml(String(action.reasoning).slice(0,200))}</div>`;
+  } else if (phase === 'verifying') {
+    const v = typeof content === 'object' ? content : {};
+    const verdict = v.approved ? '✓ Aprobado' : '✗ Rechazado';
+    bodyHtml = `<div class="auto-step-body">${verdict}${v.reason ? ` — ${escHtml(String(v.reason).slice(0,200))}` : ''}</div>`;
+  } else if (phase === 'blocked') {
+    const c = typeof content === 'object' ? content : {};
+    bodyHtml = `<div class="auto-step-body">Bloqueado: ${escHtml(String(c.reason || content).slice(0,200))}</div>`;
+  } else if (phase === 'executing') {
+    const c = typeof content === 'object' ? content : {};
+    bodyHtml = `<div class="auto-step-body">Ejecutando: <code>${escHtml(String(c.action || ''))}</code></div>`;
+  } else if (phase === 'result') {
+    const c = typeof content === 'object' ? content : {};
+    const ok = c.ok !== false;
+    bodyHtml = `<div class="auto-step-body" style="color:${ok ? 'var(--color-success,#4ade80)' : 'var(--color-destructive,#f87171)'}"><strong>${ok ? 'OK' : 'ERROR'}:</strong> ${escHtml(String(c.output || '').slice(0, 400))}</div>`;
+  } else {
+    bodyHtml = `<div class="auto-step-body">${escHtml(JSON.stringify(content).slice(0,300))}</div>`;
+  }
+
+  const phaseLabels = { thinking: 'Pensando', verifying: 'Verificando', blocked: 'Bloqueado', executing: 'Ejecutando', result: 'Resultado' };
+  const el = document.createElement('div');
+  el.className = `auto-step ${phase}${phase === 'result' && (content?.ok === false) ? ' fail' : ''}`;
+  el.innerHTML = `
+    <div class="auto-step-header">
+      <span class="auto-step-phase">${phaseLabels[phase] || phase}</span>
+      <span class="auto-step-n">iter ${stepN}</span>
+      <span class="auto-step-ts">${ts}</span>
+    </div>
+    ${bodyHtml}
+  `;
+  log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+  updateAutoStatusBadge(phase === 'result' ? 'running' : phase);
+}
+
+async function fetchAutoStatus() {
+  try {
+    const res = await apiFetch('/api/autonomous/status', { cache: 'no-store' });
+    const data = await res.json();
+    if (data.session) {
+      _autoSessionId = _autoSessionId || data.session.id;
+      updateAutoStatusBadge(data.session.status);
+      const isRunning = ['running', 'thinking', 'verifying', 'executing'].includes(data.session.status);
+      autoSetButtons(isRunning);
+      // Render last steps if log is empty and there are steps
+      const log = document.getElementById('auto-step-log');
+      const isEmpty = !log || log.querySelector('.auto-step') === null;
+      if (isEmpty && data.lastSteps?.length) {
+        clearAutoLog();
+        data.lastSteps.forEach(step => renderAutoStep({ ...step, phase: step.phase }));
+      }
+    }
+  } catch {}
+}
+
+async function fetchAutoHistory() {
+  const tbody = document.getElementById('auto-history-tbody');
+  if (!tbody) return;
+  try {
+    const res = await apiFetch('/api/autonomous/history?limit=20', { cache: 'no-store' });
+    const data = await res.json();
+    if (!data.sessions?.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--color-text-muted);padding:24px">Sin sesiones aún</td></tr>';
+      return;
+    }
+    const STATUS_EMOJI = { idle: '○', running: '⟳', completed: '✓', error: '✗', paused: '⏸' };
+    tbody.innerHTML = data.sessions.map(s => `
+      <tr>
+        <td><span class="badge ${s.status}">${STATUS_EMOJI[s.status] || ''} ${s.status}</span></td>
+        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(s.goal)}">${escHtml(s.goal.slice(0, 80))}</td>
+        <td style="font-size:11px;color:var(--color-text-muted)">${escHtml(s.model.split('/').pop())}</td>
+        <td style="text-align:center">${s.iteration} / ${s.maxIterations}</td>
+        <td style="font-size:11.5px;color:var(--color-text-muted)">${new Date(s.createdAt).toLocaleString('es-CL')}</td>
+        <td><button class="btn btn-ghost btn-sm" onclick="loadSessionSteps('${escHtml(s.id)}')">Ver pasos</button></td>
+      </tr>
+    `).join('');
+  } catch {
+    if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--color-destructive);padding:24px">Error cargando historial</td></tr>';
+  }
+}
+
+async function loadSessionSteps(sessionId) {
+  try {
+    const res = await apiFetch(`/api/autonomous/steps?sessionId=${encodeURIComponent(sessionId)}`, { cache: 'no-store' });
+    const data = await res.json();
+    if (!data.steps?.length) { showToast('Esta sesión no tiene pasos registrados', 'info'); return; }
+    clearAutoLog();
+    data.steps.forEach(step => renderAutoStep({ ...step, phase: step.phase }));
+    _autoSessionId = sessionId;
+    showToast(`Cargando ${data.steps.length} pasos de la sesión`, 'info');
+    // scroll to top of log
+    const log = document.getElementById('auto-step-log');
+    if (log) log.scrollTop = 0;
+  } catch { showToast('Error cargando pasos', 'error'); }
+}
+
+// Poll status while section is active
+setInterval(() => {
+  const section = document.getElementById('section-autonomous');
+  if (section?.classList.contains('active') && _autoSessionId) fetchAutoStatus();
+}, 5000);

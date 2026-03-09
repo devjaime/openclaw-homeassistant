@@ -10,6 +10,21 @@ import os from 'node:os';
 import { getSecret } from './src/secrets.mjs';
 import { buildSafeEnv } from './src/safe-env.mjs';
 import { classifyLine, appendAuditEntry, readAuditLog, updateAuditEntry } from './src/prompt-auditor.mjs';
+import {
+  initDb as initAutonomousDb,
+  createSession as createAutoSession,
+  getSession as getAutoSession,
+  listSessions as listAutoSessions,
+  appendStep as appendAutoStep,
+  listSteps as listAutoSteps,
+  updateSession as updateAutoSession,
+  getActiveLoops,
+  startLoop as startAutoLoop,
+  stopLoop as stopAutoLoop,
+  pauseLoop as pauseAutoLoop,
+  subscribeSSE as subscribeAutoSSE,
+  unsubscribeSSE as unsubscribeAutoSSE,
+} from './src/autonomous-agent.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2166,6 +2181,85 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ── Autonomous agent endpoints ──────────────────────────────────────────────
+  if (u.pathname === '/api/autonomous/start' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const goal = String(body?.goal || '').trim();
+    const model = String(body?.model || 'openrouter/minimax/minimax-m2.5').trim();
+    const maxIterations = Math.min(50, Math.max(5, Number(body?.maxIterations || 15)));
+    const riskLevel = ['LOW', 'MEDIUM'].includes(String(body?.riskLevel || '').toUpperCase())
+      ? String(body.riskLevel).toUpperCase() : 'MEDIUM';
+    if (!goal) { sendJson(res, 400, { ok: false, message: 'goal requerido' }); return; }
+    // Pick a different verifier model
+    const verifierModel = model.includes('minimax')
+      ? 'openrouter/google/gemini-flash-1.5'
+      : 'openrouter/minimax/minimax-m2.5';
+    const sessionId = createAutoSession({ goal, model, verifierModel, maxIterations, riskLevel });
+    startAutoLoop(sessionId);
+    sendJson(res, 202, { ok: true, sessionId, verifierModel });
+    return;
+  }
+
+  if (u.pathname === '/api/autonomous/stop' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const sessionId = String(body?.sessionId || '').trim();
+    if (!sessionId) { sendJson(res, 400, { ok: false, message: 'sessionId requerido' }); return; }
+    stopAutoLoop(sessionId);
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (u.pathname === '/api/autonomous/pause' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const sessionId = String(body?.sessionId || '').trim();
+    if (!sessionId) { sendJson(res, 400, { ok: false, message: 'sessionId requerido' }); return; }
+    pauseAutoLoop(sessionId);
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (u.pathname === '/api/autonomous/status' && req.method === 'GET') {
+    const sessionId = u.searchParams.get('sessionId') || '';
+    const activeMap = getActiveLoops();
+    const activeIds = Object.keys(activeMap);
+    const sid = sessionId || activeIds[0] || null;
+    const session = sid ? getAutoSession(sid) : null;
+    const lastSteps = sid ? listAutoSteps(sid, 10).slice(-10) : [];
+    sendJson(res, 200, { ok: true, session, lastSteps, activeLoops: activeMap, activeCount: activeIds.length });
+    return;
+  }
+
+  if (u.pathname === '/api/autonomous/history' && req.method === 'GET') {
+    const page = Math.max(0, Number(u.searchParams.get('page') || 0));
+    const limit = Math.min(50, Math.max(1, Number(u.searchParams.get('limit') || 20)));
+    const { sessions, total } = listAutoSessions(page, limit);
+    sendJson(res, 200, { ok: true, sessions, total, page, limit });
+    return;
+  }
+
+  if (u.pathname === '/api/autonomous/steps' && req.method === 'GET') {
+    const sessionId = u.searchParams.get('sessionId') || '';
+    if (!sessionId) { sendJson(res, 400, { ok: false, message: 'sessionId requerido' }); return; }
+    const steps = listAutoSteps(sessionId);
+    sendJson(res, 200, { ok: true, steps });
+    return;
+  }
+
+  if (u.pathname === '/api/autonomous/stream' && req.method === 'GET') {
+    const sessionId = u.searchParams.get('sessionId') || '';
+    if (!sessionId) { res.writeHead(400); res.end('sessionId required'); return; }
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.write(`data: ${JSON.stringify({ type: 'connected', sessionId })}\n\n`);
+    subscribeAutoSSE(sessionId, res);
+    req.on('close', () => unsubscribeAutoSSE(sessionId, res));
+    return;
+  }
+
   if (u.pathname === '/app.js') {
     return staticFile(res, 'app.js', 'application/javascript; charset=utf-8');
   }
@@ -2218,6 +2312,8 @@ async function scanLogsForAudit() {
 // Escanear logs cada 15s
 setInterval(scanLogsForAudit, 15000);
 scanLogsForAudit(); // primera vez al arrancar
+
+initAutonomousDb(); // init autonomous agent SQLite DB
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`Monitor UI en http://127.0.0.1:${PORT}`);

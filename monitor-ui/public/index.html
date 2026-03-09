@@ -34,6 +34,9 @@
       <button class="nav-item" data-section="crons" onclick="navigateTo('crons')">
         <i data-lucide="clock"></i> Cronjobs
       </button>
+      <button class="nav-item" data-section="autonomous" onclick="navigateTo('autonomous')">
+        <i data-lucide="bot"></i> Autónomo
+      </button>
       <button class="nav-item" data-section="settings" onclick="navigateTo('settings')">
         <i data-lucide="settings"></i> Ajustes
       </button>
@@ -481,6 +484,105 @@
         </div>
       </section>
 
+      <!-- ── Autonomous agent section ── -->
+      <section id="section-autonomous" class="section">
+        <div class="section-header">
+          <div>
+            <div class="section-title">Agente Autónomo</div>
+            <div class="section-subtitle">Loop auto-regulado con agente verificador independiente</div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <span id="auto-status-badge" class="badge">idle</span>
+            <button class="btn btn-ghost btn-sm" onclick="fetchAutoStatus()">
+              <i data-lucide="refresh-cw" style="width:13px;height:13px"></i>
+            </button>
+          </div>
+        </div>
+
+        <!-- Config card -->
+        <div class="card" style="margin-bottom:16px">
+          <div class="card-title" style="margin-bottom:14px">Nueva sesión</div>
+          <div style="display:grid;gap:12px">
+            <div>
+              <label style="font-size:12px;color:var(--color-text-muted);display:block;margin-bottom:6px">Objetivo del agente</label>
+              <textarea id="auto-goal" rows="3" placeholder="Ej: Investiga las últimas noticias sobre IA, guarda un resumen en workspace/ia-news.md y notifica por Telegram..."></textarea>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+              <div>
+                <label style="font-size:12px;color:var(--color-text-muted);display:block;margin-bottom:6px">Modelo pensador</label>
+                <select id="auto-model-select">
+                  <option value="openrouter/minimax/minimax-m2.5">minimax-m2.5</option>
+                  <option value="openrouter/google/gemini-flash-1.5">gemini-flash-1.5</option>
+                  <option value="openrouter/moonshotai/kimi-k2.5">kimi-k2.5</option>
+                  <option value="openrouter/anthropic/claude-3-haiku">claude-3-haiku</option>
+                </select>
+              </div>
+              <div>
+                <label style="font-size:12px;color:var(--color-text-muted);display:block;margin-bottom:6px">
+                  Máx. iteraciones: <span id="auto-iter-display">15</span>
+                </label>
+                <input type="range" id="auto-iterations" min="5" max="50" value="15"
+                  oninput="document.getElementById('auto-iter-display').textContent=this.value">
+              </div>
+              <div>
+                <label style="font-size:12px;color:var(--color-text-muted);display:block;margin-bottom:6px">Riesgo máx. permitido</label>
+                <select id="auto-risk-level">
+                  <option value="LOW">Solo LOW</option>
+                  <option value="MEDIUM" selected>LOW + MEDIUM</option>
+                </select>
+              </div>
+            </div>
+            <div id="auto-verifier-hint" style="font-size:11.5px;color:var(--color-text-subtle)">
+              Verificador: se asignará automáticamente un modelo diferente al pensador
+            </div>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-primary" id="auto-start-btn" onclick="autoStart()">
+                <i data-lucide="play" style="width:13px;height:13px"></i> Iniciar
+              </button>
+              <button class="btn btn-ghost" id="auto-pause-btn" onclick="autoPause()" disabled>
+                <i data-lucide="pause" style="width:13px;height:13px"></i> Pausar
+              </button>
+              <button class="btn btn-destructive btn-sm" id="auto-stop-btn" onclick="autoStop()" disabled>
+                <i data-lucide="square" style="width:13px;height:13px"></i> Detener
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Live step log -->
+        <div class="card" style="margin-bottom:16px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+            <div class="card-title" style="margin:0">Log en vivo</div>
+            <button class="btn btn-ghost btn-sm" onclick="clearAutoLog()">Limpiar vista</button>
+          </div>
+          <div id="auto-step-log" style="display:flex;flex-direction:column;gap:8px;max-height:520px;overflow-y:auto;padding-right:4px">
+            <div style="color:var(--color-text-subtle);font-size:12px;padding:16px;text-align:center">Sin pasos aún — inicia una sesión para ver el agente en acción</div>
+          </div>
+        </div>
+
+        <!-- Session history -->
+        <div class="card">
+          <div class="card-title" style="margin-bottom:12px">Historial de sesiones</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Estado</th>
+                  <th>Objetivo</th>
+                  <th>Modelo</th>
+                  <th>Iteraciones</th>
+                  <th>Fecha</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="auto-history-tbody">
+                <tr><td colspan="6" style="text-align:center;color:var(--color-text-muted);padding:24px">Cargando...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
       <!-- ── Settings section ── -->
       <section id="section-settings" class="section">
         <div class="section-header">
@@ -563,7 +665,7 @@
     if (s) s.classList.add('active');
     const btn = document.querySelector('[data-section="' + section + '"]');
     if (btn) btn.classList.add('active');
-    const titles = { dashboard: 'Dashboard', workroom: 'Workroom', audit: 'Audit', crons: 'Cronjobs', settings: 'Ajustes' };
+    const titles = { dashboard: 'Dashboard', workroom: 'Workroom', audit: 'Audit', crons: 'Cronjobs', autonomous: 'Agente Autónomo', settings: 'Ajustes' };
     const ht = document.getElementById('header-title');
     if (ht) ht.textContent = titles[section] || section;
     closeSidebar();
