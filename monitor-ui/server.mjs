@@ -1611,7 +1611,39 @@ async function buildStatus() {
       modelMap.set(row.model, row);
     }
   }
-  const availableModels = [...modelMap.values()].sort((a, b) => String(a.model).localeCompare(String(b.model)));
+  // Quality cloud models — shown first, recommended for complex tasks
+  const PREFERRED_CLOUD = new Set([
+    'openrouter/moonshotai/kimi-k2.5',
+    'openrouter/minimax/minimax-m2.5',
+    'openrouter/google/gemini-3-flash-preview',
+    'google/gemini-2.5-flash-lite',
+    'openrouter/deepseek/deepseek-r1-0528:free',
+    'openrouter/qwen/qwen3-coder:free',
+    'openrouter/openai/gpt-oss-120b:free',
+    'huggingface/moonshotai/Kimi-K2.5',
+  ]);
+  // Models to skip from UI (internal/delivery/bare usage)
+  const SKIP_MODELS = new Set(['openclaw/delivery-mirror', 'minimax/minimax-m2.5', 'moonshotai/kimi-k2.5']);
+  const enrichModel = (m) => {
+    const key = m.model;
+    const isLocal = key.startsWith('custom-127-0-0-1-11434/');
+    const isSkip = SKIP_MODELS.has(key);
+    const isPreferred = PREFERRED_CLOUD.has(key);
+    return {
+      ...m,
+      tier: isSkip ? 'skip' : isLocal ? 'local' : 'cloud',
+      preferred: isPreferred,
+    };
+  };
+  const availableModels = [...modelMap.values()]
+    .map(enrichModel)
+    .filter((m) => m.tier !== 'skip')
+    .sort((a, b) => {
+      // preferred cloud first, then other cloud, then local
+      if (a.preferred !== b.preferred) return a.preferred ? -1 : 1;
+      if (a.tier !== b.tier) return a.tier === 'cloud' ? -1 : 1;
+      return String(a.model).localeCompare(String(b.model));
+    });
   const modelModeGuess = modelPrimary === MODE_LOCAL_MODEL
     ? 'local'
     : modelPrimary === MODE_CLOUD_MODEL
@@ -2191,9 +2223,14 @@ const server = http.createServer(async (req, res) => {
       ? String(body.riskLevel).toUpperCase() : 'MEDIUM';
     if (!goal) { sendJson(res, 400, { ok: false, message: 'goal requerido' }); return; }
     // Pick a different verifier model
+    // Pick a different verifier model so thinker and verifier don't echo each other
     const verifierModel = model.includes('minimax')
-      ? 'openrouter/google/gemini-flash-1.5'
-      : 'openrouter/minimax/minimax-m2.5';
+      ? 'openrouter/moonshotai/kimi-k2.5'
+      : model.includes('kimi')
+        ? 'openrouter/minimax/minimax-m2.5'
+        : model.includes('gemini') || model.includes('google')
+          ? 'openrouter/minimax/minimax-m2.5'
+          : 'openrouter/moonshotai/kimi-k2.5';
     const sessionId = createAutoSession({ goal, model, verifierModel, maxIterations, riskLevel });
     startAutoLoop(sessionId);
     sendJson(res, 202, { ok: true, sessionId, verifierModel });

@@ -1332,12 +1332,24 @@ function renderModel(data) {
     if (!allModels.length) {
       modelList.innerHTML = `<span class="model-chip">${t('noModelData')}</span>`;
     } else {
-      modelList.innerHTML = allModels.map((m) => {
+      // Show preferred cloud models first, then others — local models shown smaller
+      const preferred = allModels.filter((m) => m.preferred);
+      const cloudOther = allModels.filter((m) => !m.preferred && m.tier === 'cloud');
+      const local = allModels.filter((m) => m.tier === 'local');
+      const toChip = (m, small = false) => {
         const model = esc(m.model || '-');
-        const alias = m.alias ? ` · ${esc(m.alias)}` : '';
+        const shortName = m.model.split('/').pop();
+        const aliasTag = m.alias ? ` · ${esc(m.alias)}` : '';
         const isActive = m.model === current;
-        return `<span class="model-chip ${isActive ? 'active-model' : ''}" onclick="quickSetModel('${model}')" title="Click para usar este modelo">${model}${alias}${isActive ? ' ✓' : ''}</span>`;
-      }).join('');
+        const starTag = m.preferred ? '⭐ ' : '';
+        const style = small ? 'opacity:0.55;font-size:10.5px' : '';
+        return `<span class="model-chip ${isActive ? 'active-model' : ''}" onclick="quickSetModel('${model}')" title="${model}" style="${style}">${starTag}${escHtml(shortName)}${aliasTag}${isActive ? ' ✓' : ''}</span>`;
+      };
+      modelList.innerHTML = [
+        ...preferred.map((m) => toChip(m, false)),
+        ...cloudOther.map((m) => toChip(m, false)),
+        ...local.map((m) => toChip(m, true)),
+      ].join('');
     }
   }
   // Poblar el selector de Settings también
@@ -1357,11 +1369,29 @@ function populateModelPicker(data) {
     sel.innerHTML = '<option value="">Sin modelos disponibles</option>';
     return;
   }
-  sel.innerHTML = allModels.map((m) => {
+  const preferred = allModels.filter((m) => m.preferred);
+  const cloudOther = allModels.filter((m) => !m.preferred && m.tier === 'cloud');
+  const local = allModels.filter((m) => m.tier === 'local');
+
+  const toOption = (m) => {
     const val = m.model || '';
-    const label = m.alias ? `${val} (${m.alias})` : val;
+    const shortName = val.split('/').pop();
+    const aliasTag = m.alias ? ` · ${m.alias}` : '';
+    const label = `${shortName}${aliasTag}`;
     return `<option value="${escHtml(val)}" ${val === current ? 'selected' : ''}>${escHtml(label)}</option>`;
-  }).join('');
+  };
+
+  let html = '';
+  if (preferred.length) {
+    html += `<optgroup label="⭐ Recomendados (cloud)">${preferred.map(toOption).join('')}</optgroup>`;
+  }
+  if (cloudOther.length) {
+    html += `<optgroup label="☁ Cloud">${cloudOther.map(toOption).join('')}</optgroup>`;
+  }
+  if (local.length) {
+    html += `<optgroup label="💻 Local (menor calidad)">${local.map(toOption).join('')}</optgroup>`;
+  }
+  sel.innerHTML = html;
   // Estado del gateway y sistema en settings
   const gw = document.getElementById('settings-gateway-block');
   if (gw) gw.innerHTML = `
