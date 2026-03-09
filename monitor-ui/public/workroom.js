@@ -1,5 +1,13 @@
 const LANG_KEY = 'monitor_lang';
 let lang = localStorage.getItem(LANG_KEY) || 'es';
+
+/** Fetch wrapper que incluye X-Dashboard-Token si está configurado (task 5.2). */
+function apiFetch(path, options = {}) {
+  const token = window.DASHBOARD_TOKEN || localStorage.getItem('dashboard_token') || '';
+  const headers = { ...(options.headers || {}) };
+  if (token) headers['X-Dashboard-Token'] = token;
+  return fetch(path, { ...options, headers });
+}
 if (!['es', 'en'].includes(lang)) lang = 'es';
 
 const I18N = {
@@ -276,7 +284,7 @@ async function sendMessage(deskId) {
   renderChat(deskId);
 
   try {
-    const res = await fetch('/api/workroom/send', {
+    const res = await apiFetch('/api/workroom/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ deskId, message }),
@@ -302,7 +310,7 @@ async function sendMessage(deskId) {
 
 async function loadWorkroomHistory() {
   try {
-    const res = await fetch('/api/workroom/history', { cache: 'no-store' });
+    const res = await apiFetch('/api/workroom/history', { cache: 'no-store' });
     if (!res.ok) return;
     const data = await res.json();
 
@@ -331,7 +339,7 @@ async function loadWorkroomHistory() {
 
 async function loadStatus() {
   try {
-    const res = await fetch('/api/status', { cache: 'no-store' });
+    const res = await apiFetch('/api/status', { cache: 'no-store' });
     const data = await res.json();
     renderSummary(data);
     for (const id of ['vocari', 'humanloop', 'blog', 'ha']) {
@@ -375,7 +383,7 @@ document.querySelectorAll('[data-clear]').forEach((btn) => {
   btn.addEventListener('click', async () => {
     const deskId = btn.dataset.clear;
     if (!confirm(tr('clearConfirm'))) return;
-    await fetch('/api/workroom/clear', {
+    await apiFetch('/api/workroom/clear', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ deskId }),

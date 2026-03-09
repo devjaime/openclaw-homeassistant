@@ -1,4 +1,13 @@
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+/** Fetch wrapper que incluye X-Dashboard-Token si está configurado (task 5.1). */
+function apiFetch(path, options = {}) {
+  const token = window.DASHBOARD_TOKEN || localStorage.getItem('dashboard_token') || '';
+  const headers = { ...(options.headers || {}) };
+  if (token) headers['X-Dashboard-Token'] = token;
+  return fetch(path, { ...options, headers });
+}
+
 const LANG_STORAGE_KEY = 'monitor_lang';
 const SUPPORTED_LANGS = ['es', 'en'];
 let currentLang = 'es';
@@ -1055,7 +1064,7 @@ function renderModel(data) {
 }
 
 async function setModelMode(mode) {
-  const res = await fetch('/api/model-mode', {
+  const res = await apiFetch('/api/model-mode', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ mode }),
@@ -1069,7 +1078,7 @@ async function setModelMode(mode) {
 }
 
 async function callServiceAction(service, action) {
-  const res = await fetch('/api/service-action', {
+  const res = await apiFetch('/api/service-action', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ service, action }),
@@ -1521,7 +1530,7 @@ async function sendAppleNotify() {
   }
   if (statusEl) statusEl.textContent = t('sending');
   try {
-    const res = await fetch('/api/apple/notify', {
+    const res = await apiFetch('/api/apple/notify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ target, message }),
@@ -1535,7 +1544,7 @@ async function sendAppleNotify() {
 }
 
 async function callVacuumAction(payload) {
-  const res = await fetch('/api/vacuum/action', {
+  const res = await apiFetch('/api/vacuum/action', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload || {}),
@@ -1698,7 +1707,7 @@ document.querySelectorAll('.tab').forEach((tab) => {
 // ── main load ─────────────────────────────────────────────────────────────────
 async function load() {
   try {
-    const res = await fetch('/api/status', { cache: 'no-store' });
+    const res = await apiFetch('/api/status', { cache: 'no-store' });
     const data = await res.json();
     renderSummary(data);
     renderConnections(data);
@@ -1729,7 +1738,7 @@ async function copyGatewayAuth() {
   const original = btn ? btn.textContent : '';
   try {
     if (btn) btn.textContent = t('copying');
-    const res = await fetch('/api/gateway-auth', { cache: 'no-store' });
+    const res = await apiFetch('/api/gateway-auth', { cache: 'no-store' });
     const data = await res.json();
     if (!res.ok || !data?.ok) {
       throw new Error(data?.message || 'No se pudo leer auth del gateway');
@@ -1749,7 +1758,7 @@ async function refreshUpdateStatus() {
   const pill = document.getElementById('updateStatusPill');
   if (!pill) return;
   try {
-    const res = await fetch('/api/update-status', { cache: 'no-store' });
+    const res = await apiFetch('/api/update-status', { cache: 'no-store' });
     const data = await res.json();
     if (!res.ok || !data?.ok) throw new Error(data?.message || 'status no disponible');
     const installed = data.installed || '-';
@@ -1777,7 +1786,7 @@ async function resetUsageCounters() {
       btn.textContent = t('resetting');
       btn.disabled = true;
     }
-    const res = await fetch('/api/usage/reset', {
+    const res = await apiFetch('/api/usage/reset', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',

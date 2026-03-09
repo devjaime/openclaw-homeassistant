@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { execSync, exec } from 'node:child_process';
 import net from 'node:net';
 import os from 'node:os';
+import { getSecret } from './src/secrets.mjs';
+import { buildSafeEnv } from './src/safe-env.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -47,6 +49,52 @@ const RESOURCE_SERIES_MAX_POINTS = Number(process.env.RESOURCE_SERIES_MAX_POINTS
 
 let lastResourceSampleAtMs = 0;
 let lastResourcePruneAtMs = 0;
+
+// ── Security: DASHBOARD_TOKEN auth ───────────────────────────────────────────
+const DASHBOARD_TOKEN = getSecret('dashboardToken');
+if (!DASHBOARD_TOKEN) {
+  console.warn('[WARN] DASHBOARD_TOKEN not set — dashboard auth disabled (dev mode)');
+}
+
+/**
+ * Determina si una clave de objeto es un credential sensible.
+ * Usa whitelist de sufijos/nombres exactos para evitar falsos positivos
+ * como "totalTokens" (contador) o "tokenizer" (nombre de herramienta).
+ */
+function isSensitiveKey(k) {
+  const norm = k.toLowerCase().replace(/[_\-. ]/g, '');
+  // Sufijos de credential reales
+  const CRED_SUFFIXES = ['token', 'secret', 'password', 'apikey', 'accesskey', 'credential', 'authtoken'];
+  for (const suffix of CRED_SUFFIXES) {
+    if (norm === suffix || norm.endsWith(suffix)) return true;
+  }
+  return false;
+}
+
+/** Redacta recursivamente keys sensibles de un objeto antes de enviarlo al cliente. */
+function redact(obj) {
+  if (obj === null || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) return obj.map(redact);
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (isSensitiveKey(k)) continue;
+    out[k] = redact(v);
+  }
+  return out;
+}
+
+/** Helper centralizado para enviar JSON — aplica redact() antes de serializar. */
+function sendJson(res, statusCode, data) {
+  const safe = redact(data);
+  res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(JSON.stringify(safe));
+}
+
+/** Verifica el header X-Dashboard-Token. Retorna true si la request está autorizada. */
+function isAuthorized(req) {
+  if (!DASHBOARD_TOKEN) return true; // dev mode: sin token configurado, todo permitido
+  return req.headers['x-dashboard-token'] === DASHBOARD_TOKEN;
+}
 
 // ── Workroom: in-memory agent sessions per desk ──────────────────────────────
 const WORKROOM_DESKS = ['vocari', 'humanloop', 'blog', 'ha'];
@@ -1202,6 +1250,22 @@ function staticFile(res, relPath, contentType = 'text/plain; charset=utf-8') {
   res.end(data);
 }
 
+/** Sirve un HTML inyectando window.DASHBOARD_TOKEN antes de </head> (task 5.3). */
+function serveHtmlWithToken(res, relPath) {
+  const file = path.join(PUBLIC_DIR, relPath);
+  if (!fs.existsSync(file)) {
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Not found');
+    return;
+  }
+  let html = fs.readFileSync(file, 'utf8');
+  // Inyectar token como variable global antes de cualquier script del cliente
+  const tokenScript = `<script>window.DASHBOARD_TOKEN=${JSON.stringify(DASHBOARD_TOKEN || '')};</script>`;
+  html = html.replace('</head>', `${tokenScript}\n</head>`);
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end(html);
+}
+
 function toDashboardHttp(wsUrl) {
   if (!wsUrl) return 'http://127.0.0.1:18889/';
   return wsUrl.replace(/^ws:/, 'http:').replace(/^wss:/, 'https:').replace(/\/?$/, '/');
@@ -1743,7 +1807,7 @@ async function dispatchAgentMessage(deskId, userMessage) {
   try {
     const out = await runShellAsync(
       `"${OPENCLAW_BIN}" agent --session-id ${session.sessionId} --message "$WR_MSG" --json`,
-      { WR_MSG: fullMessage },
+      { ...buildSafeEnv(), WR_MSG: fullMessage },
       120000,
     );
     if (out.ok) {
@@ -1770,10 +1834,17 @@ async function dispatchAgentMessage(deskId, userMessage) {
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
+  // ── Auth middleware: /api/* requiere X-Dashboard-Token (tasks 4.1-4.3) ──────
+  const isStaticAsset = !u.pathname.startsWith('/api/');
+  if (!isStaticAsset && !isAuthorized(req)) {
+    res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: 'Unauthorized' }));
+    return;
+  }
+
   if (u.pathname === '/api/status') {
     const payload = await buildStatus();
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify(payload));
+    sendJson(res, 200, payload);
     return;
   }
 
@@ -1782,12 +1853,11 @@ const server = http.createServer(async (req, res) => {
     const gatewayUrl = resolveGatewayUrl(cfg);
     const token = String(cfg?.gateway?.auth?.token || '').trim();
     if (!token) {
-      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify({ ok: false, message: 'Token de gateway no configurado' }));
+      sendJson(res, 400, { ok: false, message: 'Token de gateway no configurado' });
       return;
     }
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify({ ok: true, gatewayUrl, token }));
+    // Devuelve ok + gatewayUrl; el token es redactado por sendJson/redact()
+    sendJson(res, 200, { ok: true, gatewayUrl, gatewayToken: token });
     return;
   }
 
@@ -1796,41 +1866,36 @@ const server = http.createServer(async (req, res) => {
     const currentVersion = isErr(currentVersionRaw) ? '' : String(currentVersionRaw || '').trim();
     const out = runShell(`"${OPENCLAW_BIN}" update status --json`, 20000);
     if (!out.ok) {
-      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify({ ok: false, message: 'No se pudo consultar update status' }));
+      sendJson(res, 500, { ok: false, message: 'No se pudo consultar update status' });
       return;
     }
     const parsed = extractTrailingJsonObject(out.output);
     if (!parsed) {
-      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify({ ok: false, message: 'Salida no parseable de update status' }));
+      sendJson(res, 500, { ok: false, message: 'Salida no parseable de update status' });
       return;
     }
     const installed = String(currentVersion || parsed?.update?.currentVersion || '').trim();
     const latest = String(parsed?.availability?.latestVersion || parsed?.update?.registry?.latestVersion || '').trim();
     const available = Boolean(parsed?.availability?.available);
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify({
+    sendJson(res, 200, {
       ok: true,
       available,
       installed: installed || (available ? '' : latest),
       latest: latest || installed,
       channel: parsed?.channel?.label || 'stable',
-    }));
+    });
     return;
   }
 
   if (u.pathname === '/api/openclaw') {
     const data = await getOpenClawLogTail(300);
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ lines: data }));
+    sendJson(res, 200, { lines: data });
     return;
   }
 
   if (u.pathname === '/api/homeassistant') {
     const data = await getHomeAssistantLogTail(300);
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ lines: data }));
+    sendJson(res, 200, { lines: data });
     return;
   }
 
@@ -1841,11 +1906,7 @@ const server = http.createServer(async (req, res) => {
     const action = String(body?.action || '').trim();
     const out = await performServiceAction(service, action, cfg);
     const statusCode = out.ok ? 200 : 400;
-    res.writeHead(statusCode, {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-store',
-    });
-    res.end(JSON.stringify(out));
+    sendJson(res, statusCode, out);
     return;
   }
 
@@ -1853,11 +1914,7 @@ const server = http.createServer(async (req, res) => {
     const body = await readJsonBody(req);
     const mode = String(body?.mode || '').trim();
     const out = await setModelMode(mode);
-    res.writeHead(out.ok ? 200 : 400, {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-store',
-    });
-    res.end(JSON.stringify(out));
+    sendJson(res, out.ok ? 200 : 400, out);
     return;
   }
 
@@ -1865,11 +1922,7 @@ const server = http.createServer(async (req, res) => {
     const cfg = await readOpenClawConfig();
     const snapshot = await fetchOpenRouterCredits(cfg);
     const payload = await writeUsageResetState(Date.now(), snapshot.ok ? snapshot : null);
-    res.writeHead(200, {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-store',
-    });
-    res.end(JSON.stringify({ ok: true, ...payload, openrouterSnapshot: snapshot }));
+    sendJson(res, 200, { ok: true, ...payload, openrouterSnapshot: snapshot });
     return;
   }
 
@@ -1878,13 +1931,11 @@ const server = http.createServer(async (req, res) => {
     const target = String(body?.target || '').trim();
     const message = String(body?.message || '').trim();
     if (!/^notify\.[a-zA-Z0-9_]+$/.test(target)) {
-      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: false, message: 'Target inválido. Ejemplo: notify.mobile_app_iphone' }));
+      sendJson(res, 400, { ok: false, message: 'Target inválido. Ejemplo: notify.mobile_app_iphone' });
       return;
     }
     if (!message) {
-      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: false, message: 'Mensaje vacío' }));
+      sendJson(res, 400, { ok: false, message: 'Mensaje vacío' });
       return;
     }
     const service = target.split('.')[1];
@@ -1893,12 +1944,10 @@ const server = http.createServer(async (req, res) => {
       body: { message },
     });
     if (!out.ok) {
-      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: false, message: out.error || 'No se pudo enviar' }));
+      sendJson(res, 500, { ok: false, message: out.error || 'No se pudo enviar' });
       return;
     }
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ ok: true, message: `Enviado a ${target}` }));
+    sendJson(res, 200, { ok: true, message: `Enviado a ${target}` });
     return;
   }
 
@@ -1909,8 +1958,7 @@ const server = http.createServer(async (req, res) => {
     const segmentIdsInput = Array.isArray(body?.segmentIds) ? body.segmentIds : [];
 
     if (!entityId || !entityId.startsWith('vacuum.')) {
-      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: false, message: 'entityId inválido (esperado vacuum.*)' }));
+      sendJson(res, 400, { ok: false, message: 'entityId inválido (esperado vacuum.*)' });
       return;
     }
 
@@ -1927,8 +1975,7 @@ const server = http.createServer(async (req, res) => {
         .map((v) => Number(v))
         .filter((v) => Number.isFinite(v) && v > 0);
       if (!segmentIds.length) {
-        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ ok: false, message: 'segmentIds vacío para clean_zone' }));
+        sendJson(res, 400, { ok: false, message: 'segmentIds vacío para clean_zone' });
         return;
       }
       const out = await haApi('/api/services/xiaomi_miot/send_command?return_response', {
@@ -1941,25 +1988,22 @@ const server = http.createServer(async (req, res) => {
       });
       const sr = out?.data?.service_response;
       if (!out.ok || sr?.error) {
-        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({
+        sendJson(res, 500, {
           ok: false,
           message: sr?.error || out.error || 'No se pudo ejecutar clean_zone',
-        }));
+        });
         return;
       }
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({
+      sendJson(res, 200, {
         ok: true,
         message: `Limpieza por zona enviada (${segmentIds.join(', ')})`,
-      }));
+      });
       return;
     }
 
     const service = actionMap[action];
     if (!service) {
-      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: false, message: `Acción inválida: ${action}` }));
+      sendJson(res, 400, { ok: false, message: `Acción inválida: ${action}` });
       return;
     }
 
@@ -1968,12 +2012,10 @@ const server = http.createServer(async (req, res) => {
       body: { entity_id: entityId },
     });
     if (!out.ok) {
-      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: false, message: out.error || `No se pudo ejecutar ${action}` }));
+      sendJson(res, 500, { ok: false, message: out.error || `No se pudo ejecutar ${action}` });
       return;
     }
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ ok: true, message: `Acción ${action} enviada` }));
+    sendJson(res, 200, { ok: true, message: `Acción ${action} enviada` });
     return;
   }
 
@@ -1984,22 +2026,19 @@ const server = http.createServer(async (req, res) => {
     const message = String(body?.message || '').trim();
 
     if (!WORKROOM_DESKS.includes(deskId) || !message) {
-      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: false, message: 'deskId o mensaje inválido' }));
+      sendJson(res, 400, { ok: false, message: 'deskId o mensaje inválido' });
       return;
     }
     const session = WORKROOM_SESSIONS[deskId];
     if (session.busy) {
-      res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: false, busy: true, message: 'Agente ocupado, espera la respuesta anterior.' }));
+      sendJson(res, 409, { ok: false, busy: true, message: 'Agente ocupado, espera la respuesta anterior.' });
       return;
     }
     session.messages.push({ role: 'user', text: message, ts: Date.now() });
     session.busy = true;
     // Dispatch without awaiting so HTTP response returns immediately
     dispatchAgentMessage(deskId, message).catch(() => {});
-    res.writeHead(202, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ ok: true, pending: true }));
+    sendJson(res, 202, { ok: true, pending: true });
     return;
   }
 
@@ -2009,8 +2048,7 @@ const server = http.createServer(async (req, res) => {
       const s = WORKROOM_SESSIONS[id];
       payload[id] = { messages: s.messages, busy: s.busy, sessionId: s.sessionId };
     }
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify(payload));
+    sendJson(res, 200, payload);
     return;
   }
 
@@ -2018,8 +2056,7 @@ const server = http.createServer(async (req, res) => {
     const body = await readJsonBody(req);
     const deskId = String(body?.deskId || '').trim().toLowerCase();
     if (!WORKROOM_DESKS.includes(deskId)) {
-      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: false, message: 'deskId inválido' }));
+      sendJson(res, 400, { ok: false, message: 'deskId inválido' });
       return;
     }
     const session = WORKROOM_SESSIONS[deskId];
@@ -2027,8 +2064,7 @@ const server = http.createServer(async (req, res) => {
     session.busy = false;
     // New session ID so the next message starts a fresh agent context
     session.sessionId = `wr_${deskId}_${Date.now()}`;
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ ok: true }));
+    sendJson(res, 200, { ok: true });
     return;
   }
 
@@ -2042,10 +2078,10 @@ const server = http.createServer(async (req, res) => {
     return staticFile(res, 'styles.css', 'text/css; charset=utf-8');
   }
   if (u.pathname === '/workroom' || u.pathname === '/workroom.html') {
-    return staticFile(res, 'workroom.html', 'text/html; charset=utf-8');
+    return serveHtmlWithToken(res, 'workroom.html');
   }
   if (u.pathname === '/' || u.pathname === '/index.html') {
-    return staticFile(res, 'index.html', 'text/html; charset=utf-8');
+    return serveHtmlWithToken(res, 'index.html');
   }
 
   res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
