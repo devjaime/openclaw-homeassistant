@@ -1327,16 +1327,130 @@ function renderModel(data) {
   const modelList = document.getElementById('modelAvailableList');
   if (modelList) {
     const allModels = Array.isArray(data?.openclaw?.availableModels) ? data.openclaw.availableModels : [];
+    const current = data?.openclaw?.modelPrimary || '';
     if (!allModels.length) {
       modelList.innerHTML = `<span class="model-chip">${t('noModelData')}</span>`;
     } else {
       modelList.innerHTML = allModels.map((m) => {
         const model = esc(m.model || '-');
         const alias = m.alias ? ` · ${esc(m.alias)}` : '';
-        return `<span class="model-chip">${model}${alias}</span>`;
+        const isActive = m.model === current;
+        return `<span class="model-chip ${isActive ? 'active-model' : ''}" onclick="quickSetModel('${model}')" title="Click para usar este modelo">${model}${alias}${isActive ? ' ✓' : ''}</span>`;
       }).join('');
     }
   }
+  // Poblar el selector de Settings también
+  populateModelPicker(data);
+}
+
+// ── Model picker helpers (Settings section) ───────────────────────────────────
+let _lastStatusData = null;
+
+function populateModelPicker(data) {
+  _lastStatusData = data;
+  const sel = document.getElementById('model-picker-select');
+  if (!sel) return;
+  const allModels = Array.isArray(data?.openclaw?.availableModels) ? data.openclaw.availableModels : [];
+  const current = data?.openclaw?.modelPrimary || '';
+  if (!allModels.length) {
+    sel.innerHTML = '<option value="">Sin modelos disponibles</option>';
+    return;
+  }
+  sel.innerHTML = allModels.map((m) => {
+    const val = m.model || '';
+    const label = m.alias ? `${val} (${m.alias})` : val;
+    return `<option value="${escHtml(val)}" ${val === current ? 'selected' : ''}>${escHtml(label)}</option>`;
+  }).join('');
+  // Estado del gateway y sistema en settings
+  const gw = document.getElementById('settings-gateway-block');
+  if (gw) gw.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+      <span class="status-dot ${data.openclaw.listening ? 'online' : 'offline'}"></span>
+      <strong>${data.openclaw.listening ? 'Online' : 'Offline'}</strong>
+    </div>
+    <div style="font-size:12.5px;color:var(--color-text-muted)">
+      <div>URL: <code style="font-size:11.5px">${esc(data.openclaw.gatewayUrl || '—')}</code></div>
+      <div style="margin-top:4px">Uptime: ${Math.floor((data.uptimeSeconds || 0) / 60)} min</div>
+    </div>
+    <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-ghost btn-sm" id="copyGatewayAuthBtn2" onclick="copyGatewayAuth2()">
+        Copiar token gateway
+      </button>
+    </div>`;
+  const info = document.getElementById('settings-info-block');
+  if (info) info.innerHTML = `
+    <div style="font-size:12.5px;line-height:1.9;color:var(--color-text-muted)">
+      <div>Modelo activo: <span style="color:var(--color-accent);font-weight:600">${esc(current || '—')}</span></div>
+      <div>Modo: <strong style="color:var(--color-text)">${esc(data.openclaw.modelModeGuess || '—')}</strong></div>
+      <div>HA HTTP: <span class="${data.homeassistant.httpOk ? 'ok' : 'bad'}">${data.homeassistant.httpOk ? `OK (${data.homeassistant.httpStatus})` : 'Sin respuesta'}</span></div>
+      <div>Errors recientes: <span class="${data.openclaw.errorCountRecent > 0 ? 'bad' : 'ok'}">${data.openclaw.errorCountRecent}</span></div>
+    </div>`;
+  // Actualizar botones de modo en settings
+  const mode = String(data.openclaw.modelModeGuess || '').toLowerCase();
+  document.querySelectorAll('#settings-mode-actions .mode-btn').forEach((btn) => {
+    const bm = btn.dataset.mode;
+    btn.classList.toggle('active', bm === 'local' ? mode.includes('local') : mode.includes('cloud') || mode.includes('dia'));
+  });
+}
+
+function previewModel(val) {
+  const statusEl = document.getElementById('model-set-status');
+  if (statusEl) statusEl.textContent = val ? `Seleccionado: ${val} — haz click en "Aplicar modelo" para activar` : '';
+}
+
+async function applySelectedModel() {
+  const sel = document.getElementById('model-picker-select');
+  const statusEl = document.getElementById('model-set-status');
+  const btn = document.getElementById('model-apply-btn');
+  const model = sel?.value?.trim();
+  if (!model) return;
+  if (btn) btn.disabled = true;
+  if (statusEl) statusEl.textContent = `Aplicando ${model}...`;
+  try {
+    const res = await apiFetch('/api/model-mode', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ mode: 'custom', model }) });
+    const data = await res.json().catch(() => ({}));
+    if (statusEl) statusEl.textContent = data?.message || `✓ Modelo aplicado: ${model}`;
+    showToast(`Modelo cambiado a ${model.split('/').pop()}`, 'success');
+    load(); // refrescar estado
+  } catch (e) {
+    if (statusEl) statusEl.textContent = `Error: ${e.message}`;
+    showToast('Error al cambiar modelo', 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function quickSetModel(model) {
+  showToast(`Cambiando a ${model.split('/').pop()}...`, 'info', 1500);
+  try {
+    await apiFetch('/api/model-mode', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ mode: 'custom', model }) });
+    showToast(`✓ Modelo: ${model.split('/').pop()}`, 'success');
+    load();
+  } catch { showToast('Error al cambiar modelo', 'error'); }
+}
+
+async function setModeFromSettings(mode) {
+  const msg = document.getElementById('settings-mode-msg');
+  if (msg) msg.textContent = `Aplicando modo ${mode}...`;
+  try {
+    const out = await setModelMode(mode);
+    if (msg) msg.textContent = out?.message || `✓ Modo ${mode} activado`;
+    showToast(`Modo ${mode} activado`, 'success');
+    load();
+  } catch (e) {
+    if (msg) msg.textContent = `Error: ${e.message}`;
+    showToast('Error al cambiar modo', 'error');
+  }
+}
+
+async function copyGatewayAuth2() {
+  try {
+    const res = await apiFetch('/api/gateway-auth', { cache: 'no-store' });
+    const data = await res.json();
+    if (!data?.ok) throw new Error(data?.message || 'Sin token');
+    await navigator.clipboard.writeText(`URL: ${data.gatewayUrl}`);
+    showToast('URL del gateway copiada', 'success');
+  } catch (e) { showToast(`Error: ${e.message}`, 'error'); }
 }
 
 async function setModelMode(mode) {
@@ -1981,30 +2095,88 @@ document.querySelectorAll('.tab').forEach((tab) => {
 });
 
 // ── main load ─────────────────────────────────────────────────────────────────
+/** Alias público para el botón Actualizar del header */
+function refreshStatus() { load(); }
+
+/** Muestra skeletons en los contenedores clave antes de que lleguen los datos */
+function showSkeletons() {
+  const sk = (id, h = 80) => {
+    const el = document.getElementById(id);
+    if (el && !el.dataset.loaded) el.innerHTML = `<div class="skeleton" style="height:${h}px;border-radius:10px"></div>`;
+  };
+  sk('summary', 80);
+  sk('connections', 100);
+  sk('modelInfo', 120);
+  sk('resourceSummary', 60);
+  sk('serviceControls', 80);
+  sk('lastActivity', 60);
+  sk('soulState', 40);
+  sk('usageSummary', 60);
+}
+
+/** Actualiza el dot y badge del header con el estado del gateway */
+function updateHeaderStatus(data) {
+  const dot = document.getElementById('gateway-dot');
+  const txt = document.getElementById('gateway-status-text');
+  const modelBadgeEl = document.getElementById('model-badge');
+  const modelNameEl  = document.getElementById('model-name-text');
+  const online = data?.openclaw?.listening;
+  if (dot) { dot.className = `status-dot ${online ? 'online' : 'offline'}`; }
+  if (txt) txt.textContent = online ? 'Online' : 'Offline';
+  if (modelNameEl && data?.openclaw?.modelPrimary) {
+    modelNameEl.textContent = data.openclaw.modelPrimary.split('/').pop();
+    if (modelBadgeEl) modelBadgeEl.style.display = '';
+  }
+}
+
+/**
+ * Carga lazy: muestra skeletons inmediatamente, luego carga datos de /api/status
+ * y renderiza cada sección en cuanto llega la respuesta (no espera a todas).
+ * Las secciones pesadas (charts, usage, security) renderizan en microtask siguiente.
+ */
 async function load() {
+  showSkeletons();
   try {
     const res = await apiFetch('/api/status', { cache: 'no-store' });
     const data = await res.json();
+
+    // ── Sección crítica: renderiza primero (visible above-the-fold)
     renderSummary(data);
+    updateHeaderStatus(data);
     renderConnections(data);
     renderModel(data);
-    renderResources(data);
-    renderServiceControls(data);
-    renderJobs(data);
-    renderUsage(data);
-    renderOpenRouter(data);
-    renderProjects(data);
-    renderVacuum(data);
-    renderApple(data);
-    renderTelegram(data.activity.telegramEvents || []);
-    renderLogContainer('openclawLogs', data.logs.openclaw || []);
-    renderLogContainer('haLogs', data.logs.homeassistant || []);
-    renderLastActivity(data);
-    renderSoul(data);
-    renderSecurity(data);
-    updateCharts(buildFilteredUsage(data));
+
+    // ── Sección media: renderiza en siguiente frame
+    requestAnimationFrame(() => {
+      renderResources(data);
+      renderServiceControls(data);
+      renderLastActivity(data);
+      renderSoul(data);
+      renderJobs(data);
+    });
+
+    // ── Sección pesada: charts + usage + security en microtask posterior
+    setTimeout(() => {
+      renderUsage(data);
+      renderOpenRouter(data);
+      renderSecurity(data);
+      updateCharts(buildFilteredUsage(data));
+      renderProjects(data);
+      renderVacuum(data);
+      renderApple(data);
+      renderTelegram(data.activity?.telegramEvents || []);
+      renderLogContainer('openclawLogs', data.logs?.openclaw || []);
+      renderLogContainer('haLogs', data.logs?.homeassistant || []);
+      renderLastActivity(data);
+    }, 0);
+
     setText('lastUpdate', `${t('lastUpdate')}: ${new Date().toLocaleString(getLocale())}`);
   } catch (e) {
+    // Mostrar error en los skeleton placeholders
+    ['summary','connections','modelInfo'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = `<span style="color:var(--color-destructive);font-size:12px">Error cargando: ${e.message}</span>`;
+    });
     setText('lastUpdate', `Error: ${String(e.message || e)}`);
   }
 }

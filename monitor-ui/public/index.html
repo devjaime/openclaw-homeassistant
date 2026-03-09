@@ -486,19 +486,48 @@
         <div class="section-header">
           <div>
             <div class="section-title">Ajustes</div>
-            <div class="section-subtitle">Configuración del gateway y modelo</div>
+            <div class="section-subtitle">Configuración del gateway, modelo y modo</div>
           </div>
         </div>
+
+        <!-- Model picker prominente -->
+        <div class="card" style="margin-bottom:16px" id="model-picker-section">
+          <div class="card-title">Modelo del bot</div>
+          <p style="font-size:13px;color:var(--color-text-muted);margin-bottom:14px">
+            Selecciona el modelo que usará OpenClaw como modelo primario.
+            El cambio aplica inmediatamente.
+          </p>
+          <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+            <div style="flex:1;min-width:220px">
+              <label style="font-size:12px;color:var(--color-text-muted);display:block;margin-bottom:6px">Modelo activo</label>
+              <select id="model-picker-select" onchange="previewModel(this.value)">
+                <option value="">Cargando modelos...</option>
+              </select>
+            </div>
+            <button class="btn btn-primary" onclick="applySelectedModel()" id="model-apply-btn">
+              Aplicar modelo
+            </button>
+          </div>
+          <p id="model-set-status"></p>
+          <hr class="sep">
+          <div class="card-title" style="margin-bottom:8px">Modo rápido</div>
+          <div class="mode-actions" id="settings-mode-actions">
+            <button class="mode-btn" data-mode="local" onclick="setModeFromSettings('local')">🌙 Modo Local (noche)</button>
+            <button class="mode-btn" data-mode="cloud" onclick="setModeFromSettings('cloud')">☁ Modo Cloud (día)</button>
+          </div>
+          <p id="settings-mode-msg" style="font-size:12px;color:var(--color-text-muted);margin-top:8px;min-height:16px"></p>
+        </div>
+
         <div class="grid grid-2">
           <div class="card">
-            <div class="card-title">Modo de modelo</div>
-            <div id="settings-mode-block" style="margin-top:8px">
+            <div class="card-title">Estado del gateway</div>
+            <div id="settings-gateway-block" style="margin-top:8px">
               <div class="skeleton skeleton-text"></div>
             </div>
           </div>
           <div class="card">
-            <div class="card-title">Gateway</div>
-            <div id="settings-gateway-block" style="margin-top:8px">
+            <div class="card-title">Información del sistema</div>
+            <div id="settings-info-block" style="margin-top:8px">
               <div class="skeleton skeleton-text"></div>
             </div>
           </div>
