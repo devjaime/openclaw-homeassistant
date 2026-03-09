@@ -188,9 +188,17 @@ function safeJsonParse(text, fallback = null) {
   }
 }
 
-function run(cmd) {
+// Ensure standard bin dirs are always in PATH for child processes
+const EXTENDED_PATH = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', process.env.PATH].filter(Boolean).join(':');
+
+function run(cmd, timeoutMs = 5000) {
   try {
-    return execSync(cmd, { stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000, encoding: 'utf8' }).trim();
+    return execSync(cmd, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: timeoutMs,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: EXTENDED_PATH },
+    }).trim();
   } catch (err) {
     const stderr = err?.stderr ? String(err.stderr).trim() : '';
     const msg = stderr || String(err?.message || 'command failed');
@@ -620,20 +628,35 @@ async function getCronJobs(cfg) {
   const token = cfg?.gateway?.auth?.token;
   if (!token) return { ok: false, error: 'token no disponible', jobs: [] };
   const gatewayUrl = resolveGatewayUrl(cfg);
-  const raw = run(`openclaw cron list --url ${gatewayUrl} --token ${token} --json`);
+  const raw = run(`"${OPENCLAW_BIN}" cron list --url ${gatewayUrl} --token ${token} --json`);
   if (isErr(raw)) {
     return { ok: false, error: raw.replace('__ERR__ ', ''), jobs: [] };
   }
   const parsed = safeJsonParse(raw, {});
   const jobs = Array.isArray(parsed?.jobs) ? parsed.jobs : [];
-  const compact = jobs.map((j) => ({
-    id: j.id,
-    name: j.name,
-    enabled: Boolean(j.enabled),
-    expr: j?.schedule?.expr || j?.cron?.expr || '',
-    tz: j?.schedule?.tz || j?.cron?.tz || '',
-    nextRunAtMs: j?.state?.nextRunAtMs || null,
-  }));
+  const compact = jobs.map((j) => {
+    // Build human-readable schedule expression
+    let expr = j?.schedule?.expr || j?.cron?.expr || '';
+    const kind = j?.schedule?.kind || '';
+    if (!expr && kind === 'every' && j?.schedule?.everyMs) {
+      const ms = j.schedule.everyMs;
+      const mins = Math.round(ms / 60000);
+      if (mins < 60) expr = `every ${mins}m`;
+      else if (mins < 1440) expr = `every ${Math.round(mins / 60)}h`;
+      else expr = `every ${Math.round(mins / 1440)}d`;
+    }
+    return {
+      id: j.id,
+      name: j.name,
+      enabled: Boolean(j.enabled),
+      expr,
+      kind,
+      tz: j?.schedule?.tz || j?.cron?.tz || '',
+      nextRunAtMs: j?.state?.nextRunAtMs || null,
+      lastRunAtMs: j?.state?.lastRunAtMs || null,
+      lastStatus: j?.state?.lastStatus || j?.state?.lastRunStatus || null,
+    };
+  });
   return { ok: true, jobs: compact };
 }
 
