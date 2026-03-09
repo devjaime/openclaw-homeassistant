@@ -8,6 +8,282 @@ function apiFetch(path, options = {}) {
   return fetch(path, { ...options, headers });
 }
 
+// ── Navigation (shell layout) ─────────────────────────────────────────────────
+const SECTION_TITLES = {
+  dashboard: 'Dashboard', workroom: 'Workroom',
+  audit: 'Audit de Prompts', crons: 'Cronjobs', settings: 'Ajustes',
+};
+
+function navigateTo(sectionId) {
+  const sections = document.querySelectorAll('.section');
+  const navItems = document.querySelectorAll('.nav-item');
+  const run = () => {
+    sections.forEach((s) => s.classList.remove('active'));
+    navItems.forEach((n) => n.classList.remove('active'));
+    const target = document.getElementById(`section-${sectionId}`);
+    if (target) target.classList.add('active');
+    const navItem = document.querySelector(`[data-section="${sectionId}"]`);
+    if (navItem) navItem.classList.add('active');
+    const titleEl = document.getElementById('header-title');
+    if (titleEl) titleEl.textContent = SECTION_TITLES[sectionId] || sectionId;
+    if (sectionId === 'crons') fetchCrons();
+    if (sectionId === 'audit') fetchAuditLog();
+    closeSidebar();
+  };
+  if (document.startViewTransition) {
+    document.startViewTransition(run);
+  } else {
+    run();
+  }
+}
+
+function toggleSidebar() {
+  document.getElementById('app-shell')?.classList.toggle('sidebar-open');
+}
+function closeSidebar() {
+  document.getElementById('app-shell')?.classList.remove('sidebar-open');
+}
+
+// ── Toast system ──────────────────────────────────────────────────────────────
+function showToast(message, type = 'info', durationMs = 3000) {
+  const container = document.getElementById('toast-container');
+  if (!container) return;
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  const icon = { success: '✓', error: '✕', warn: '⚠', info: 'ℹ' }[type] || 'ℹ';
+  toast.innerHTML = `<span style="font-weight:700">${icon}</span><span>${message}</span>`;
+  container.appendChild(toast);
+  setTimeout(() => {
+    toast.classList.add('exit');
+    setTimeout(() => toast.remove(), 200);
+  }, durationMs);
+}
+
+// ── Lucide icons init ─────────────────────────────────────────────────────────
+function initLucide() {
+  if (window.lucide) window.lucide.createIcons();
+}
+
+// ── Cronjobs ──────────────────────────────────────────────────────────────────
+let _cronsIntervalId = null;
+
+async function fetchCrons() {
+  const tbody = document.getElementById('crons-tbody');
+  const summary = document.getElementById('cron-summary-block');
+  if (tbody) tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:24px"><div class="skeleton skeleton-text" style="margin:auto;width:120px"></div></td></tr>';
+  try {
+    const res = await apiFetch('/api/crons', { cache: 'no-store' });
+    const data = await res.json();
+    renderCronTable(data.jobs || []);
+    if (summary) {
+      const active = (data.jobs || []).filter((j) => j.enabled).length;
+      summary.innerHTML = `<div style="font-size:24px;font-weight:700">${active}</div><div style="color:var(--color-text-muted);font-size:12px">${active === 1 ? 'job activo' : 'jobs activos'} de ${(data.jobs || []).length} total</div>`;
+    }
+  } catch (e) {
+    if (tbody) tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--color-destructive);padding:24px">Error cargando cronjobs</td></tr>`;
+  }
+}
+
+function cronExprHuman(expr) {
+  try { return window.cronstrue ? cronstrue.toString(expr, { locale: 'es' }) : expr; } catch { return expr; }
+}
+
+function cronNextRun(nextRunAtMs) {
+  if (!nextRunAtMs) return '—';
+  const diff = nextRunAtMs - Date.now();
+  if (diff < 0) return 'vencido';
+  const m = Math.floor(diff / 60000);
+  if (m < 60) return `en ${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `en ${h}h ${m % 60}m`;
+  return `en ${Math.floor(h / 24)}d`;
+}
+
+function renderCronTable(jobs) {
+  const tbody = document.getElementById('crons-tbody');
+  if (!tbody) return;
+  if (!jobs.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--color-text-muted);padding:32px">Sin cronjobs registrados</td></tr>';
+    return;
+  }
+  tbody.innerHTML = jobs.map((j) => {
+    const dotClass = j.enabled ? 'active' : 'paused';
+    const dotLabel = j.enabled ? 'Activo' : 'Pausado';
+    const toggleLabel = j.enabled ? 'Pausar' : 'Reactivar';
+    const toggleAction = j.enabled ? 'pause' : 'resume';
+    return `<tr id="cron-row-${j.id}">
+      <td><span class="cron-dot ${dotClass}" title="${dotLabel}"></span></td>
+      <td style="font-weight:500">${escHtml(j.name || j.id)}</td>
+      <td><code style="font-family:var(--font-mono);font-size:12px;color:var(--color-accent)">${escHtml(j.expr)}</code><br><span style="font-size:11px;color:var(--color-text-muted)">${cronExprHuman(j.expr)}</span></td>
+      <td style="color:var(--color-text-muted);font-size:12.5px">${cronNextRun(j.nextRunAtMs)}</td>
+      <td>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-ghost btn-sm" onclick="cronAction('${j.id}','${toggleAction}')">${toggleLabel}</button>
+          <button class="btn btn-ghost btn-sm" onclick="cronExtend('${j.id}')">+1h</button>
+          <button class="btn btn-destructive btn-sm" onclick="cronDelete('${j.id}','${escHtml(j.name || j.id)}')">Eliminar</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function cronAction(id, action) {
+  try {
+    const res = await apiFetch(`/api/crons/${id}/${action}`, { method: 'POST', headers: {'Content-Type':'application/json'} });
+    const data = await res.json();
+    if (data.ok) { showToast(`Job ${action === 'pause' ? 'pausado' : 'reactivado'}`, 'success'); fetchCrons(); }
+    else showToast(data.message || 'Error', 'error');
+  } catch { showToast('Error de red', 'error'); }
+}
+
+async function cronExtend(id) {
+  try {
+    const res = await apiFetch(`/api/crons/${id}/extend`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ delayMs: 3600000 }) });
+    const data = await res.json();
+    if (data.ok) showToast('Próxima ejecución extendida +1h', 'success');
+    else showToast(data.message || 'Error', 'error');
+  } catch { showToast('Error de red', 'error'); }
+}
+
+async function cronDelete(id, name) {
+  if (!confirm(`¿Eliminar el cronjob "${name}"? Esta acción no se puede deshacer.`)) return;
+  try {
+    const res = await apiFetch(`/api/crons/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.ok) {
+      const row = document.getElementById(`cron-row-${id}`);
+      if (row) { row.style.opacity = '0'; row.style.transition = 'opacity 200ms'; setTimeout(() => row.remove(), 200); }
+      showToast('Job eliminado', 'success');
+    } else showToast(data.message || 'Error al eliminar', 'error');
+  } catch { showToast('Error de red', 'error'); }
+}
+
+// ── Audit log ─────────────────────────────────────────────────────────────────
+let _auditFilter = '';
+let _pendingAuditId = null;
+
+function setAuditFilter(el, filter) {
+  _auditFilter = filter;
+  document.querySelectorAll('#audit-filter-chips .chip').forEach((c) => c.classList.remove('active'));
+  el.classList.add('active');
+  fetchAuditLog();
+}
+
+async function fetchAuditLog() {
+  const tbody = document.getElementById('audit-tbody');
+  if (tbody) tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:24px"><div class="skeleton skeleton-text" style="margin:auto;width:120px"></div></td></tr>';
+  try {
+    const params = new URLSearchParams({ limit: 50 });
+    if (_auditFilter) params.set('criticality', _auditFilter);
+    const res = await apiFetch(`/api/audit/log?${params}`, { cache: 'no-store' });
+    const data = await res.json();
+    renderAuditTable(data.entries || []);
+    // Update pending badge
+    const pendingRes = await apiFetch('/api/audit/pending', { cache: 'no-store' });
+    const pendingData = await pendingRes.json();
+    const badge = document.getElementById('audit-pending-badge');
+    if (badge) {
+      const count = (pendingData.entries || []).length;
+      badge.textContent = count;
+      badge.style.display = count > 0 ? '' : 'none';
+    }
+  } catch {
+    if (tbody) tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--color-destructive);padding:24px">Error cargando audit log</td></tr>';
+  }
+}
+
+const CRITICALITY_BADGE = {
+  CRITICAL: 'badge badge-critical',
+  HIGH: 'badge badge-high',
+  MEDIUM: 'badge badge-medium',
+  LOW: 'badge badge-low',
+};
+
+function renderAuditTable(entries) {
+  const tbody = document.getElementById('audit-tbody');
+  if (!tbody) return;
+  if (!entries.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--color-text-muted);padding:32px">Sin entradas en el audit log</td></tr>';
+    return;
+  }
+  tbody.innerHTML = entries.map((e) => {
+    const badgeClass = CRITICALITY_BADGE[e.criticality] || 'badge badge-low';
+    const statusBadge = e.status === 'approved'
+      ? '<span class="badge badge-success">✓ Aprobado</span>'
+      : e.status === 'denied'
+        ? '<span class="badge badge-critical">✕ Denegado</span>'
+        : '<span class="badge">pendiente</span>';
+    const canReview = ['CRITICAL','HIGH'].includes(e.criticality) && e.status === 'logged';
+    const reviewBtn = canReview
+      ? `<button class="btn btn-ghost btn-sm" onclick="openAuditModal('${e.id}','${escHtml(e.criticality)}','${escHtml(e.label || '')}','${escHtml(e.description || '')}','${escHtml(e.command || '')}')">Revisar</button>`
+      : '';
+    const ts = e.ts ? new Date(e.ts).toLocaleString('es-CL', { dateStyle:'short', timeStyle:'short' }) : '—';
+    return `<tr>
+      <td><span class="${badgeClass}">${escHtml(e.label || e.criticality)}</span></td>
+      <td style="font-family:var(--font-mono);font-size:11.5px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(e.command)}">${escHtml((e.command || '').slice(0, 80))}</td>
+      <td>${statusBadge}</td>
+      <td style="font-size:12px;color:var(--color-text-muted)">${ts}</td>
+      <td>${reviewBtn}</td>
+    </tr>`;
+  }).join('');
+}
+
+function openAuditModal(id, criticality, label, description, command) {
+  _pendingAuditId = id;
+  document.getElementById('audit-modal-title').textContent = `${label || criticality} — Revisar prompt`;
+  document.getElementById('audit-modal-body').innerHTML =
+    `<p style="margin-bottom:10px"><strong>¿Qué significa dar acceso?</strong></p>
+     <p style="margin-bottom:12px">${escHtml(description)}</p>
+     <div class="code-block"><code style="font-size:11.5px">${escHtml(command)}</code></div>`;
+  document.getElementById('audit-approve-btn').onclick = () => submitAudit('approve');
+  document.getElementById('audit-deny-btn').onclick = () => submitAudit('deny');
+  document.getElementById('audit-modal').style.display = 'flex';
+}
+
+function closeAuditModal(e) {
+  if (!e || e.target === document.getElementById('audit-modal')) {
+    document.getElementById('audit-modal').style.display = 'none';
+    _pendingAuditId = null;
+  }
+}
+
+async function submitAudit(action) {
+  if (!_pendingAuditId) return;
+  try {
+    const res = await apiFetch(`/api/audit/${action}`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ id: _pendingAuditId }) });
+    const data = await res.json();
+    if (data.ok) {
+      showToast(action === 'approve' ? 'Prompt aprobado' : 'Prompt denegado', action === 'approve' ? 'success' : 'warn');
+      fetchAuditLog();
+    }
+  } catch { showToast('Error al procesar', 'error'); }
+  document.getElementById('audit-modal').style.display = 'none';
+  _pendingAuditId = null;
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  initLucide();
+  // Poll audit pending badge every 30s
+  setInterval(async () => {
+    try {
+      const res = await apiFetch('/api/audit/pending', { cache: 'no-store' });
+      const data = await res.json();
+      const badge = document.getElementById('audit-pending-badge');
+      if (badge) { const c = (data.entries||[]).length; badge.textContent=c; badge.style.display=c>0?'':'none'; }
+    } catch {}
+  }, 30000);
+  // Poll crons every 30s when visible
+  setInterval(() => {
+    const croSection = document.getElementById('section-crons');
+    if (croSection?.classList.contains('active')) fetchCrons();
+  }, 30000);
+});
+
 const LANG_STORAGE_KEY = 'monitor_lang';
 const SUPPORTED_LANGS = ['es', 'en'];
 let currentLang = 'es';

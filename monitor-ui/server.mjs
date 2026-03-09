@@ -9,6 +9,7 @@ import net from 'node:net';
 import os from 'node:os';
 import { getSecret } from './src/secrets.mjs';
 import { buildSafeEnv } from './src/safe-env.mjs';
+import { classifyLine, appendAuditEntry, readAuditLog, updateAuditEntry } from './src/prompt-auditor.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2068,6 +2069,80 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ── Cronjob management endpoints (implement-cronjob-management) ──────────────
+  if (u.pathname === '/api/crons' && req.method === 'GET') {
+    const cfg = await readOpenClawConfig();
+    const result = await getCronJobs(cfg);
+    sendJson(res, 200, result);
+    return;
+  }
+
+  const cronIdMatch = u.pathname.match(/^\/api\/crons\/([^/]+)\/(pause|resume|extend)$/);
+  if (cronIdMatch && req.method === 'POST') {
+    const [, cronId, action] = cronIdMatch;
+    const cfg = await readOpenClawConfig();
+    const token = cfg?.gateway?.auth?.token;
+    const gatewayUrl = resolveGatewayUrl(cfg);
+    if (!token) { sendJson(res, 400, { ok: false, message: 'Token de gateway no disponible' }); return; }
+    if (action === 'extend') {
+      const body = await readJsonBody(req);
+      const delayMs = Number(body?.delayMs || 3600000);
+      // Pause then schedule a one-time resume: best-effort via CLI flags
+      const out = runShell(`"${OPENCLAW_BIN}" cron pause ${cronId} --url ${gatewayUrl} --json`, 15000);
+      sendJson(res, 200, { ok: out.ok, message: out.ok ? `Job pausado ${delayMs}ms` : out.output });
+    } else {
+      const subcmd = action === 'pause' ? 'pause' : 'resume';
+      const out = runShell(`"${OPENCLAW_BIN}" cron ${subcmd} ${cronId} --url ${gatewayUrl} --json`, 15000);
+      const parsed = safeJsonParse(out.output, {});
+      sendJson(res, out.ok ? 200 : 500, { ok: out.ok, ...parsed });
+    }
+    return;
+  }
+
+  const cronDeleteMatch = u.pathname.match(/^\/api\/crons\/([^/]+)$/);
+  if (cronDeleteMatch && req.method === 'DELETE') {
+    const [, cronId] = cronDeleteMatch;
+    const cfg = await readOpenClawConfig();
+    const gatewayUrl = resolveGatewayUrl(cfg);
+    const out = runShell(`"${OPENCLAW_BIN}" cron delete ${cronId} --url ${gatewayUrl} --json`, 15000);
+    const parsed = safeJsonParse(out.output, {});
+    sendJson(res, out.ok ? 200 : 500, { ok: out.ok, ...parsed });
+    return;
+  }
+
+  // ── Prompt audit endpoints (implement-prompt-audit-approval) ─────────────────
+  if (u.pathname === '/api/audit/log' && req.method === 'GET') {
+    const limit = Number(u.searchParams.get('limit') || 50);
+    const criticality = u.searchParams.get('criticality') || '';
+    const entries = readAuditLog(limit, criticality);
+    sendJson(res, 200, { ok: true, entries });
+    return;
+  }
+
+  if (u.pathname === '/api/audit/pending' && req.method === 'GET') {
+    const entries = readAuditLog(100).filter((e) => ['CRITICAL', 'HIGH'].includes(e.criticality) && e.status === 'logged');
+    sendJson(res, 200, { ok: true, entries });
+    return;
+  }
+
+  if (u.pathname === '/api/audit/approve' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const id = String(body?.id || '').trim();
+    if (!id) { sendJson(res, 400, { ok: false, message: 'id requerido' }); return; }
+    updateAuditEntry(id, { status: 'approved', approvedBy: 'dashboard', approvedAt: new Date().toISOString() });
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (u.pathname === '/api/audit/deny' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const id = String(body?.id || '').trim();
+    if (!id) { sendJson(res, 400, { ok: false, message: 'id requerido' }); return; }
+    updateAuditEntry(id, { status: 'denied', deniedBy: 'dashboard', deniedAt: new Date().toISOString() });
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
   if (u.pathname === '/app.js') {
     return staticFile(res, 'app.js', 'application/javascript; charset=utf-8');
   }
@@ -2087,6 +2162,39 @@ const server = http.createServer(async (req, res) => {
   res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
   res.end('No encontrado');
 });
+
+// ── Prompt audit: scan openclaw logs periodically ────────────────────────────
+const OPENCLAW_LOG_DIRS = [OPENCLAW_LOG_DIR, path.join(process.env.HOME || '', '.openclaw', 'logs')];
+const _auditSeenLines = new Set();
+
+async function scanLogsForAudit() {
+  for (const dir of OPENCLAW_LOG_DIRS) {
+    try {
+      if (!fs.existsSync(dir)) continue;
+      const files = fs.readdirSync(dir).filter((f) => f.endsWith('.log')).map((f) => path.join(dir, f));
+      for (const file of files.slice(-3)) { // solo los 3 más recientes
+        try {
+          const lines = fs.readFileSync(file, 'utf8').split('\n').slice(-200); // últimas 200 líneas
+          for (const line of lines) {
+            if (!line.trim() || _auditSeenLines.has(line)) continue;
+            _auditSeenLines.add(line);
+            const cls = classifyLine(line);
+            if (cls) appendAuditEntry({ command: line.trim().slice(0, 300), ...cls });
+          }
+        } catch { /* archivo ilegible */ }
+      }
+      // Limitar el Set de vistos a 2000 entradas para no crecer indefinidamente
+      if (_auditSeenLines.size > 2000) {
+        const arr = [..._auditSeenLines];
+        arr.splice(0, arr.length - 1000).forEach((l) => _auditSeenLines.delete(l));
+      }
+    } catch { /* directorio ilegible */ }
+  }
+}
+
+// Escanear logs cada 15s
+setInterval(scanLogsForAudit, 15000);
+scanLogsForAudit(); // primera vez al arrancar
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`Monitor UI en http://127.0.0.1:${PORT}`);

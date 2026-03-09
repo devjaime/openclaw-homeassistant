@@ -229,32 +229,51 @@ const DESKS = ['vocari', 'humanloop', 'blog', 'ha'];
 // Local shadow of server-side conversation state
 const chatState = Object.fromEntries(DESKS.map((id) => [id, { messages: [], busy: false, lastLen: 0 }]));
 
+function fmtRelTime(ts) {
+  if (!ts) return '';
+  const diff = Date.now() - ts;
+  if (diff < 60000) return 'ahora';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m`;
+  return `${Math.floor(diff / 3600000)}h`;
+}
+
 function renderChat(deskId) {
   const state = chatState[deskId];
   const chatEl = document.querySelector(`[data-chat="${deskId}"]`);
   if (!chatEl) return;
 
   if (!state.messages.length && !state.busy) {
-    chatEl.innerHTML = `<div class="chat-empty">${escapeHtml(tr('chatEmpty'))}</div>`;
+    chatEl.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--color-text-muted);font-size:13px;white-space:pre-line;text-align:center">${escapeHtml(tr('chatEmpty'))}</div>`;
     return;
   }
 
   const wasAtBottom = chatEl.scrollTop + chatEl.clientHeight >= chatEl.scrollHeight - 30;
 
   const msgHtml = state.messages.map((m) => {
-    const cls = m.role === 'user' ? 'user' : m.role === 'error' ? 'error' : 'agent';
-    const timeStr = m.ts ? `<div class="chat-ts">${fmtTime(m.ts)}</div>` : '';
-    const body = m.role === 'agent'
-      ? renderMarkdown(m.text)
-      : `${m.role === 'error' ? '✗ ' : '▷ '}${escapeHtml(m.text)}`;
-    return `<div class="chat-msg ${cls}">${body}${timeStr}</div>`;
+    const ts = m.ts ? `<div class="chat-meta ${m.role === 'user' ? 'chat-meta-user' : ''}">${fmtRelTime(m.ts)}</div>` : '';
+    if (m.role === 'user') {
+      return `<div style="display:flex;flex-direction:column;align-items:flex-end">
+        <div class="chat-bubble chat-bubble-user">${escapeHtml(m.text)}</div>${ts}</div>`;
+    }
+    if (m.role === 'error') {
+      return `<div style="display:flex;flex-direction:column;align-items:flex-start">
+        <div class="chat-bubble chat-bubble-error">✕ ${escapeHtml(m.text)}</div>${ts}</div>`;
+    }
+    // agent: render markdown (code blocks get copy button)
+    const body = renderMarkdown(m.text);
+    return `<div style="display:flex;flex-direction:column;align-items:flex-start">
+      <div class="chat-bubble chat-bubble-agent">${body}</div>${ts}</div>`;
   }).join('');
 
-  const thinkingHtml = state.busy
-    ? `<div class="chat-thinking">${escapeHtml(tr('thinking'))}</div>`
+  // Typing indicator when busy
+  const typingHtml = state.busy
+    ? `<div style="display:flex;align-items:flex-start">
+        <div class="chat-bubble chat-bubble-agent" style="padding:10px 16px">
+          <div class="typing-indicator"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+        </div></div>`
     : '';
 
-  chatEl.innerHTML = msgHtml + thinkingHtml;
+  chatEl.innerHTML = `<div class="chat-messages">${msgHtml}${typingHtml}</div>`;
 
   if (wasAtBottom || state.messages.length !== state.lastLen) {
     chatEl.scrollTop = chatEl.scrollHeight;
