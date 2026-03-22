@@ -5,9 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OpenClaw Monitor</title>
   <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/cronstrue@latest/dist/cronstrue.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
 <body>
 <div id="app-shell">
@@ -36,6 +38,18 @@
       </button>
       <button class="nav-item" data-section="autonomous" onclick="navigateTo('autonomous')">
         <i data-lucide="bot"></i> Autónomo
+      </button>
+      <button class="nav-item" data-section="multiagent" onclick="navigateTo('multiagent')">
+        <i data-lucide="network"></i> Multi-Agente
+      </button>
+      <button class="nav-item" data-section="models" onclick="navigateTo('models')">
+        <i data-lucide="cpu"></i> Modelos
+      </button>
+      <button class="nav-item" data-section="programmer" onclick="navigateTo('programmer')">
+        <i data-lucide="code-2"></i> Programador
+      </button>
+      <button class="nav-item" data-section="neo4j" onclick="navigateTo('neo4j')">
+        <i data-lucide="share-2"></i> Graph Memory
       </button>
       <button class="nav-item" data-section="settings" onclick="navigateTo('settings')">
         <i data-lucide="settings"></i> Ajustes
@@ -73,32 +87,81 @@
             <div class="section-title">Dashboard</div>
             <div class="section-subtitle">Estado del sistema en tiempo real</div>
           </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-            <select id="langSelect" style="width:auto">
-              <option value="es">ES</option>
-              <option value="en">EN</option>
-            </select>
-            <button class="btn btn-ghost btn-sm" id="refreshBtn">
-              <i data-lucide="refresh-cw" style="width:13px;height:13px"></i> Actualizar
-            </button>
-            <button class="btn btn-ghost btn-sm" id="resetUsageBtn" title="Resetear contadores de tokens y costos desde ahora">
-              <i data-lucide="rotate-ccw" style="width:13px;height:13px"></i> Reset métricas
-            </button>
-            <button class="btn btn-ghost btn-sm" id="refreshUpdateBtn" title="Consultar estado de actualización">
-              <i data-lucide="arrow-up-circle" style="width:13px;height:13px"></i> Update
-            </button>
-            <button class="btn btn-ghost btn-sm" id="copyGatewayAuthBtn" title="Copia URL + token para OpenClaw Control">
-              <i data-lucide="key" style="width:13px;height:13px"></i> Copiar token
-            </button>
-            <span id="updateStatusPill" class="status-badge">Update: ...</span>
-            <a id="openDashboard" target="_blank" rel="noreferrer" class="btn btn-ghost btn-sm">Dashboard OpenClaw</a>
-            <a href="http://127.0.0.1:8123" target="_blank" rel="noreferrer" class="btn btn-ghost btn-sm">Home Assistant</a>
-            <a href="http://127.0.0.1:5678" target="_blank" rel="noreferrer" class="btn btn-ghost btn-sm">n8n</a>
+          <div class="toolbar-shell">
+            <div class="toolbar-main">
+              <select id="langSelect" style="width:auto">
+                <option value="es">ES</option>
+                <option value="en">EN</option>
+              </select>
+              <label class="status-badge" style="gap:6px;cursor:pointer">
+                <input id="autoRefreshToggle" type="checkbox" checked />
+                <span data-i18n="autoRefresh">Auto-refresh</span>
+              </label>
+              <select id="autoRefreshInterval" style="width:auto">
+                <option value="30000">30s</option>
+                <option value="60000">1m</option>
+                <option value="120000">2m</option>
+                <option value="300000">5m</option>
+              </select>
+              <span id="autoRefreshStatus" class="status-badge">Auto: ON · 2m</span>
+              <button class="btn btn-ghost btn-sm" id="refreshBtn">
+                <i data-lucide="refresh-cw" style="width:13px;height:13px"></i> Actualizar
+              </button>
+              <button class="btn btn-ghost btn-sm" id="toolbarToggleBtn">
+                <i data-lucide="sliders-horizontal" style="width:13px;height:13px"></i>
+                <span data-i18n="advancedControls">Avanzado</span>
+              </button>
+            </div>
+            <div class="toolbar-advanced collapsed" id="toolbarAdvanced">
+              <button class="btn btn-ghost btn-sm" id="resetUsageBtn" title="Resetear contadores de tokens y costos desde ahora">
+                <i data-lucide="rotate-ccw" style="width:13px;height:13px"></i> Reset métricas
+              </button>
+              <button class="btn btn-ghost btn-sm" id="refreshUpdateBtn" title="Consultar estado de actualización">
+                <i data-lucide="arrow-up-circle" style="width:13px;height:13px"></i> Update
+              </button>
+              <button class="btn btn-ghost btn-sm" id="copyGatewayAuthBtn" title="Copia URL + token para OpenClaw Control">
+                <i data-lucide="key" style="width:13px;height:13px"></i> Copiar token
+              </button>
+              <span id="updateStatusPill" class="status-badge">Update: ...</span>
+              <a id="openDashboard" target="_blank" rel="noreferrer" class="btn btn-ghost btn-sm">Dashboard OpenClaw</a>
+              <a href="http://127.0.0.1:8123" target="_blank" rel="noreferrer" class="btn btn-ghost btn-sm">Home Assistant</a>
+              <a href="http://127.0.0.1:5678" target="_blank" rel="noreferrer" class="btn btn-ghost btn-sm">n8n</a>
+            </div>
           </div>
         </div>
 
+        <div class="dashboard-landing" style="margin-bottom:14px">
+          <button class="chip active" onclick="document.getElementById('dash-overview')?.scrollIntoView({behavior:'smooth',block:'start'})">Overview</button>
+          <button class="chip" onclick="document.getElementById('dash-observability')?.scrollIntoView({behavior:'smooth',block:'start'})">Observability</button>
+          <button class="chip" onclick="document.getElementById('dash-costs')?.scrollIntoView({behavior:'smooth',block:'start'})">Costs</button>
+          <button class="chip" onclick="document.getElementById('dash-security')?.scrollIntoView({behavior:'smooth',block:'start'})">Security</button>
+          <button class="chip" onclick="document.getElementById('dash-iot')?.scrollIntoView({behavior:'smooth',block:'start'})">IoT</button>
+          <button class="chip" onclick="document.getElementById('dash-ops')?.scrollIntoView({behavior:'smooth',block:'start'})">Ops</button>
+          <button class="chip" onclick="document.getElementById('dash-logs')?.scrollIntoView({behavior:'smooth',block:'start'})">Logs</button>
+        </div>
+
+        <div id="dash-overview" class="dashboard-split-label" data-i18n="dashOverview">Overview</div>
         <!-- KPI summary -->
         <div id="summary" class="grid grid-4" style="margin-bottom:16px"></div>
+
+        <!-- World map experience panel -->
+        <div class="card world-card" style="margin-bottom:16px">
+          <div class="card-title" data-i18n="worldMapTitle">Mapa global de actividad</div>
+          <div class="world-card-grid">
+            <div class="world-map-wrap">
+              <div id="worldLeafletMap" class="world-leaflet-map"></div>
+            </div>
+            <div>
+              <div id="worldMapStats" class="grid grid-2"></div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+                <button id="worldMapLocateBtn" class="btn btn-ghost btn-sm">📍 Usar mi ubicación</button>
+                <span id="worldMapLocateStatus" style="font-size:11px;color:var(--color-text-muted)"></span>
+              </div>
+              <div id="worldMapTrace" class="world-map-trace"></div>
+              <div id="worldMapLegend" class="world-map-legend"></div>
+            </div>
+          </div>
+        </div>
 
         <!-- Connections + Model -->
         <div class="grid grid-2" style="margin-bottom:16px">
@@ -112,6 +175,7 @@
           </div>
         </div>
 
+        <div id="dash-observability" class="dashboard-split-label" data-i18n="dashObservability">Observability</div>
         <!-- Resource usage + chart -->
         <div class="card" style="margin-bottom:16px">
           <div class="card-title" data-i18n="resourceUsage">Uso de recursos por servicio</div>
@@ -152,6 +216,7 @@
           <div id="soulState"></div>
         </div>
 
+        <div id="dash-costs" class="dashboard-split-label" data-i18n="dashCosts">Costs & Usage</div>
         <!-- Charts row -->
         <div class="grid grid-2" style="margin-bottom:16px">
           <div class="card">
@@ -215,6 +280,7 @@
           <p style="font-size:12px;color:var(--color-text-muted);margin-top:8px" data-i18n="openrouterLedgerHint">Incluye gasto externo registrado en ledger para jobs fuera de sesiones estándar.</p>
         </div>
 
+        <div id="dash-security" class="dashboard-split-label" data-i18n="dashSecurity">Security</div>
         <!-- Security / sensitive access -->
         <div class="card" style="margin-bottom:16px">
           <div class="card-title" data-i18n="securitySensitive">Seguridad y accesos sensibles</div>
@@ -255,6 +321,7 @@
           </div>
         </div>
 
+        <div id="dash-iot" class="dashboard-split-label" data-i18n="dashIot">IoT & Home</div>
         <!-- Vacuum -->
         <div class="card" style="margin-bottom:16px">
           <div class="card-title" data-i18n="vacuumSection">Aspiradora Xiaomi (mapa y zonas)</div>
@@ -338,6 +405,7 @@
           <div id="appleNotifyStatus" style="font-size:12px;color:var(--color-text-muted);margin-top:6px"></div>
         </div>
 
+        <div id="dash-ops" class="dashboard-split-label" data-i18n="dashOps">Operations</div>
         <!-- Commits + Jobs row -->
         <div class="grid grid-2" style="margin-bottom:16px">
           <div class="card">
@@ -374,6 +442,7 @@
           </div>
         </div>
 
+        <div id="dash-logs" class="dashboard-split-label" data-i18n="dashLogs">Logs & Events</div>
         <!-- Telegram + Logs row -->
         <div class="grid grid-2" style="margin-bottom:16px">
           <div class="card">
@@ -382,16 +451,14 @@
           </div>
           <div class="card">
             <div class="card-title" data-i18n="logs">Logs</div>
-            <div style="display:flex;gap:4px;margin-bottom:10px">
-              <div class="chip active" data-tab="openclaw" onclick="switchLogTab('openclaw')">OpenClaw</div>
-              <div class="chip" data-tab="ha" onclick="switchLogTab('ha')">Home Assistant</div>
-            </div>
-            <div id="tab-openclaw">
+            <details class="log-accordion" open>
+              <summary>OpenClaw</summary>
               <div id="openclawLogs" class="log-block" style="max-height:200px"></div>
-            </div>
-            <div id="tab-ha" style="display:none">
+            </details>
+            <details class="log-accordion">
+              <summary>Home Assistant</summary>
               <div id="haLogs" class="log-block" style="max-height:200px"></div>
-            </div>
+            </details>
           </div>
         </div>
 
@@ -588,6 +655,191 @@
         </div>
       </section>
 
+      <!-- ── Neo4j Graph Memory section ── -->
+      <section id="section-neo4j" class="section">
+        <div class="section-header">
+          <div>
+            <div class="section-title">Graph Memory</div>
+            <div class="section-subtitle">Neo4j · Knowledge Graph · POLE+O · Reasoning Traces</div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn btn-ghost btn-sm" onclick="fetchNeo4jStatus()">
+              <i data-lucide="refresh-cw" style="width:13px;height:13px"></i> Actualizar
+            </button>
+          </div>
+        </div>
+
+        <!-- Status card -->
+        <div class="card">
+          <div class="card-title">
+            <i data-lucide="heart-pulse" style="width:14px;height:14px;vertical-align:-2px"></i>
+            Estado del Bridge
+          </div>
+          <div id="neo4j-status" style="color:var(--color-text-muted);font-size:13px">Verificando conexion...</div>
+        </div>
+
+        <!-- Stats card -->
+        <div class="card" style="margin-top:16px">
+          <div class="card-title">
+            <i data-lucide="bar-chart-3" style="width:14px;height:14px;vertical-align:-2px"></i>
+            Estadisticas del Grafo
+          </div>
+          <div id="neo4j-stats" class="neo4j-stats-grid">
+            <div class="skeleton skeleton-text" style="height:60px;border-radius:8px"></div>
+          </div>
+        </div>
+
+        <!-- Search / Recall -->
+        <div class="card" style="margin-top:16px">
+          <div class="card-title">
+            <i data-lucide="brain" style="width:14px;height:14px;vertical-align:-2px"></i>
+            Buscar en Graph Memory
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:12px">
+            <input type="text" id="neo4j-search-input" placeholder="Buscar personas, proyectos, decisiones..."
+              style="flex:1;padding:8px 12px;border-radius:6px;border:1px solid var(--color-border);background:var(--color-bg-elevated);color:var(--color-text);font-size:13px"
+              onkeydown="if(event.key==='Enter')neo4jRecall()">
+            <button class="btn btn-primary btn-sm" onclick="neo4jRecall()">
+              <i data-lucide="search" style="width:13px;height:13px"></i> Buscar
+            </button>
+          </div>
+          <div id="neo4j-recall-results" style="font-size:13px;color:var(--color-text-muted)">Ingresa un termino para buscar en el grafo de memoria</div>
+        </div>
+
+        <!-- Cypher Query -->
+        <div class="card" style="margin-top:16px">
+          <div class="card-title">
+            <i data-lucide="terminal" style="width:14px;height:14px;vertical-align:-2px"></i>
+            Cypher Query
+            <span style="font-size:11px;font-weight:400;color:var(--color-text-muted);margin-left:8px">solo lectura</span>
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:8px">
+            <textarea id="neo4j-cypher-input" rows="3" placeholder="MATCH (p:Person)-[:WORKS_AT]->(o:Organization) RETURN p.name, o.name LIMIT 10"
+              style="flex:1;padding:8px 12px;border-radius:6px;border:1px solid var(--color-border);background:var(--color-bg-elevated);color:var(--color-text);font-size:12px;font-family:monospace;resize:vertical"></textarea>
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+            <button class="btn btn-primary btn-sm" onclick="neo4jRunCypher()">
+              <i data-lucide="play" style="width:13px;height:13px"></i> Ejecutar
+            </button>
+            <button class="btn btn-ghost btn-sm" onclick="neo4jSetCypher('MATCH (n) RETURN labels(n) AS type, count(*) AS count ORDER BY count DESC')">Contar nodos</button>
+            <button class="btn btn-ghost btn-sm" onclick="neo4jSetCypher('MATCH (p:Person) RETURN p.name, p.role, p.company LIMIT 20')">Personas</button>
+            <button class="btn btn-ghost btn-sm" onclick="neo4jSetCypher('MATCH (o:Object) RETURN o.name, o.description LIMIT 20')">Objetos</button>
+            <button class="btn btn-ghost btn-sm" onclick="neo4jSetCypher('MATCH (a)-[r]->(b) RETURN labels(a)[0] AS from_type, a.name AS from, type(r) AS rel, labels(b)[0] AS to_type, b.name AS to LIMIT 30')">Relaciones</button>
+            <button class="btn btn-ghost btn-sm" onclick="neo4jSetCypher('MATCH (s:Session)-[:HAS_MESSAGE]->(m:Message) RETURN s.session_id, count(m) AS msgs ORDER BY msgs DESC LIMIT 10')">Sesiones</button>
+          </div>
+          <div id="neo4j-cypher-results" style="font-size:12px;color:var(--color-text-muted)">Escribe una consulta Cypher y presiona Ejecutar</div>
+        </div>
+
+        <!-- Store entity -->
+        <div class="card" style="margin-top:16px">
+          <div class="card-title">
+            <i data-lucide="plus-circle" style="width:14px;height:14px;vertical-align:-2px"></i>
+            Agregar Entidad al Grafo
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+            <input type="text" id="neo4j-entity-name" placeholder="Nombre (ej: vocari.cl)" style="padding:8px 12px;border-radius:6px;border:1px solid var(--color-border);background:var(--color-bg-elevated);color:var(--color-text);font-size:13px">
+            <select id="neo4j-entity-type" style="padding:8px 12px;border-radius:6px;border:1px solid var(--color-border);background:var(--color-bg-elevated);color:var(--color-text);font-size:13px">
+              <option value="Object">Object</option>
+              <option value="Person">Person</option>
+              <option value="Organization">Organization</option>
+              <option value="Location">Location</option>
+              <option value="Event">Event</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:8px">
+            <input type="text" id="neo4j-entity-desc" placeholder="Descripcion (ej: plataforma de orientacion vocacional)" style="flex:1;padding:8px 12px;border-radius:6px;border:1px solid var(--color-border);background:var(--color-bg-elevated);color:var(--color-text);font-size:13px">
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="neo4jStoreEntity()">
+            <i data-lucide="save" style="width:13px;height:13px"></i> Guardar entidad
+          </button>
+          <div id="neo4j-store-result" style="margin-top:8px;font-size:12px;color:var(--color-text-muted)"></div>
+        </div>
+
+        <!-- Architecture diagram & docs -->
+        <div class="card" style="margin-top:16px">
+          <div class="card-title">
+            <i data-lucide="book-open" style="width:14px;height:14px;vertical-align:-2px"></i>
+            Arquitectura y Uso
+          </div>
+          <div style="font-size:13px;color:var(--color-text-muted);line-height:1.7">
+            <div class="neo4j-arch-diagram">
+              <pre style="font-size:11px;color:var(--color-text);overflow-x:auto;padding:12px;border-radius:8px;background:var(--color-bg-elevated);border:1px solid var(--color-border)">
+┌─────────────────────────────────────────────┐
+│              OpenClaw Agent                 │
+│                                             │
+│  ┌──────────────┐ ┌──────────────────────┐  │
+│  │ Native Tools │ │ Auto Hooks           │  │
+│  │memory_search │ │before_prompt_build   │  │
+│  │memory_get    │ │agent_end             │  │
+│  │memory_store  │ │after_tool_call*      │  │
+│  └──────┬───────┘ └──────────┬───────────┘  │
+│         └─────────────┬───────┘              │
+│                       │ bridge client        │
+└───────────────────────┼─────────────────────┘
+                        │
+                ┌───────▼───────┐
+                │  FastAPI      │
+                │  Bridge       │
+                │  :7575        │
+                └───────┬───────┘
+                        │
+                ┌───────▼───────┐
+                │    Neo4j      │
+                │    :7687      │
+                └───────────────┘</pre>
+            </div>
+
+            <h4 style="margin:16px 0 8px;font-size:14px;color:var(--color-text)">Modelo POLE+O (tipos de nodo)</h4>
+            <div class="neo4j-node-types">
+              <span class="neo4j-node-badge neo4j-person">Person</span>
+              <span class="neo4j-node-badge neo4j-org">Organization</span>
+              <span class="neo4j-node-badge neo4j-location">Location</span>
+              <span class="neo4j-node-badge neo4j-event">Event</span>
+              <span class="neo4j-node-badge neo4j-object">Object</span>
+              <span class="neo4j-node-badge neo4j-observation">Observation</span>
+            </div>
+
+            <h4 style="margin:16px 0 8px;font-size:14px;color:var(--color-text)">3 capas de memoria</h4>
+            <table class="neo4j-layers-table">
+              <tr><td><strong>Short-term</strong></td><td>Mensajes por sesion/canal. Nodos: <code>Session</code>, <code>Message</code></td></tr>
+              <tr><td><strong>Long-term</strong></td><td>Knowledge graph POLE+O. Entidades, relaciones, observaciones</td></tr>
+              <tr><td><strong>Reasoning</strong></td><td>Trazas de decisiones. Nodos: <code>ToolCall</code>, <code>ReasoningStep</code>, <code>SkillInvocation</code></td></tr>
+            </table>
+
+            <h4 style="margin:16px 0 8px;font-size:14px;color:var(--color-text)">Ejemplos de uso con el agente</h4>
+            <div style="background:var(--color-bg-elevated);border:1px solid var(--color-border);border-radius:8px;padding:12px;margin-bottom:8px">
+              <div style="font-size:11px;color:var(--color-text-subtle);margin-bottom:4px">Buscar en memoria del grafo</div>
+              <code style="font-size:12px;color:var(--color-accent)">openclaw agent --message "¿Que sabes sobre el proyecto vocari?"</code>
+              <div style="font-size:11px;color:var(--color-text-muted);margin-top:4px">→ El agente usa <code>memory_search</code> y <code>entity_lookup</code> automaticamente</div>
+            </div>
+            <div style="background:var(--color-bg-elevated);border:1px solid var(--color-border);border-radius:8px;padding:12px;margin-bottom:8px">
+              <div style="font-size:11px;color:var(--color-text-subtle);margin-bottom:4px">Guardar un hecho importante</div>
+              <code style="font-size:12px;color:var(--color-accent)">openclaw agent --message "Recuerda: vocari.cl usa Supabase como backend y Netlify para deploy"</code>
+              <div style="font-size:11px;color:var(--color-text-muted);margin-top:4px">→ El agente usa <code>memory_store</code> para crear nodos y relaciones</div>
+            </div>
+            <div style="background:var(--color-bg-elevated);border:1px solid var(--color-border);border-radius:8px;padding:12px;margin-bottom:8px">
+              <div style="font-size:11px;color:var(--color-text-subtle);margin-bottom:4px">Consultar relaciones</div>
+              <code style="font-size:12px;color:var(--color-accent)">openclaw agent --message "¿Quienes estan involucrados en humanloop y que herramientas usan?"</code>
+              <div style="font-size:11px;color:var(--color-text-muted);margin-top:4px">→ El agente usa <code>graph_query</code> con Cypher para traversar relaciones</div>
+            </div>
+            <div style="background:var(--color-bg-elevated);border:1px solid var(--color-border);border-radius:8px;padding:12px">
+              <div style="font-size:11px;color:var(--color-text-subtle);margin-bottom:4px">Auditar decisiones del agente</div>
+              <code style="font-size:12px;color:var(--color-accent)">openclaw agent --message "¿Por que decidiste usar n8n en vez de Temporal para humanloop?"</code>
+              <div style="font-size:11px;color:var(--color-text-muted);margin-top:4px">→ El agente usa <code>reasoning_trace</code> para buscar la traza de esa decision</div>
+            </div>
+
+            <h4 style="margin:16px 0 8px;font-size:14px;color:var(--color-text)">Configuracion activa</h4>
+            <table class="neo4j-layers-table">
+              <tr><td><code>autoRecall</code></td><td>Inyecta contexto relevante del grafo antes de cada respuesta del agente</td></tr>
+              <tr><td><code>autoCapture</code></td><td>Almacena mensajes del usuario despues de runs exitosos</td></tr>
+              <tr><td><code>graphTools</code></td><td>Expone <code>entity_lookup</code> y <code>graph_query</code> al agente</td></tr>
+              <tr><td><code>observational</code></td><td>Registra trazas de tool calls para auditoria</td></tr>
+              <tr><td><code>readOnlyCypher</code></td><td>Las queries desde el dashboard son solo lectura</td></tr>
+            </table>
+          </div>
+        </div>
+      </section>
+
       <!-- ── Settings section ── -->
       <section id="section-settings" class="section">
         <div class="section-header">
@@ -641,6 +893,374 @@
         </div>
       </section>
 
+      <!-- ── Multi-Agente section ── -->
+      <section id="section-multiagent" class="section">
+        <div class="section-header">
+          <div>
+            <div class="section-title">Multi-Agente</div>
+            <div class="section-subtitle">Agentes · Sesiones · Spawn · Configuración</div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn btn-ghost btn-sm" onclick="fetchMultiAgent()">
+              <i data-lucide="refresh-cw" style="width:13px;height:13px"></i> Actualizar
+            </button>
+          </div>
+        </div>
+
+        <!-- KPIs -->
+        <div class="kpi-row">
+          <div class="kpi-card">
+            <div class="kpi-label">Agentes</div>
+            <div class="kpi-value" id="ma-agents-count">—</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Sesiones recientes</div>
+            <div class="kpi-value" id="ma-sessions-count">—</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">A2A habilitado</div>
+            <div class="kpi-value" id="ma-a2a-status">—</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Profundidad spawn</div>
+            <div class="kpi-value" id="ma-spawn-depth">—</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">ACP</div>
+            <div class="kpi-value" id="ma-acp-status">—</div>
+          </div>
+        </div>
+
+        <!-- Agents list -->
+        <div class="card" style="margin-top:16px">
+          <div class="card-title" style="margin-bottom:12px">
+            <i data-lucide="users" style="width:14px;height:14px;vertical-align:-2px"></i>
+            Agentes configurados
+          </div>
+          <div id="ma-agents-list" style="color:var(--color-text-muted);font-size:13px">Cargando...</div>
+        </div>
+
+        <!-- Spawn sub-agent -->
+        <div class="card" style="margin-top:16px">
+          <div class="card-title" style="margin-bottom:12px">
+            <i data-lucide="play-circle" style="width:14px;height:14px;vertical-align:-2px"></i>
+            Lanzar sub-agente
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <textarea id="ma-spawn-task" rows="3" placeholder="Describe la tarea para el sub-agente..." style="width:100%;resize:vertical;font-size:13px;padding:8px 10px;background:var(--color-input,var(--color-surface-elevated));border:1px solid var(--color-border);border-radius:var(--radius-sm);color:var(--color-text);font-family:var(--font-sans)"></textarea>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+              <select id="ma-spawn-agent" style="min-width:140px">
+                <option value="main">main</option>
+              </select>
+              <select id="ma-spawn-model" style="min-width:180px">
+                <option value="">Modelo por defecto</option>
+                <option value="custom-127-0-0-1-11434/qwen2.5:7b">qwen2.5:7b (local)</option>
+                <option value="custom-127-0-0-1-11434/llama3.1:8b">llama3.1:8b (local)</option>
+                <option value="openrouter/minimax/minimax-m2.5">minimax-m2.5 (cloud)</option>
+                <option value="openrouter/moonshotai/kimi-k2.5">kimi-k2.5 (cloud)</option>
+              </select>
+              <select id="ma-spawn-thinking" style="min-width:130px">
+                <option value="low">Thinking: low</option>
+                <option value="medium">Thinking: medium</option>
+                <option value="high">Thinking: high</option>
+              </select>
+              <button class="btn btn-primary btn-sm" onclick="spawnSubAgent()">
+                <i data-lucide="zap" style="width:13px;height:13px"></i> Spawn
+              </button>
+            </div>
+            <div id="ma-spawn-result" style="font-size:12px;color:var(--color-text-muted);min-height:16px"></div>
+          </div>
+        </div>
+
+        <!-- Recent sessions -->
+        <div class="card" style="margin-top:16px">
+          <div class="card-title" style="margin-bottom:12px;display:flex;justify-content:space-between;align-items:center">
+            <span><i data-lucide="clock" style="width:14px;height:14px;vertical-align:-2px"></i> Sesiones recientes</span>
+            <select id="ma-sessions-filter" style="width:auto;font-size:12px" onchange="fetchMultiAgentSessions()">
+              <option value="">Todos los agentes</option>
+            </select>
+          </div>
+          <div style="overflow-x:auto">
+            <table class="table" id="ma-sessions-table">
+              <thead>
+                <tr>
+                  <th>Agente</th>
+                  <th>Session ID</th>
+                  <th>Turnos</th>
+                  <th>Modelo</th>
+                  <th>Actualizado</th>
+                </tr>
+              </thead>
+              <tbody id="ma-sessions-tbody">
+                <tr><td colspan="5" style="text-align:center;padding:24px"><div class="skeleton skeleton-text" style="margin:auto;width:160px"></div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Configuration toggles -->
+        <div class="card" style="margin-top:16px">
+          <div class="card-title" style="margin-bottom:12px">
+            <i data-lucide="sliders" style="width:14px;height:14px;vertical-align:-2px"></i>
+            Configuración multi-agente
+          </div>
+          <div style="display:flex;flex-direction:column;gap:12px" id="ma-config-block">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px;background:var(--color-bg-elevated,var(--color-bg));border-radius:6px">
+              <div>
+                <div style="font-size:13px;font-weight:500">Agent-to-Agent (A2A)</div>
+                <div style="font-size:11px;color:var(--color-text-muted)">Permite que agentes se envíen mensajes entre sí</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="ma-a2a-toggle" onchange="setMultiAgentConfig('agentToAgentEnabled', this.checked)">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px;background:var(--color-bg-elevated,var(--color-bg));border-radius:6px">
+              <div>
+                <div style="font-size:13px;font-weight:500">Profundidad de spawn</div>
+                <div style="font-size:11px;color:var(--color-text-muted)">Max sub-agentes anidados (1=normal, 2=orquestador)</div>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <input type="number" id="ma-depth-input" min="1" max="5" value="1" style="width:60px;padding:4px 8px;font-size:13px;background:var(--color-input,var(--color-surface-elevated));border:1px solid var(--color-border);border-radius:var(--radius-sm);color:var(--color-text);text-align:center">
+                <button class="btn btn-ghost btn-sm" onclick="setMultiAgentConfig('maxSpawnDepth', Number(document.getElementById('ma-depth-input').value))">Guardar</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Architecture diagram explanation -->
+        <div class="card" style="margin-top:16px">
+          <div class="card-title" style="margin-bottom:10px">
+            <i data-lucide="info" style="width:14px;height:14px;vertical-align:-2px"></i>
+            Patrones multi-agente disponibles
+          </div>
+          <div class="ma-patterns-grid">
+            <div class="ma-pattern-card">
+              <div class="ma-pattern-icon">🤖→🤖</div>
+              <div class="ma-pattern-title">Agentes aislados</div>
+              <div class="ma-pattern-desc">Múltiples agentes con distintos canales/identidades. Sin comunicación entre ellos. Ideal para separar trabajo/personal.</div>
+            </div>
+            <div class="ma-pattern-card">
+              <div class="ma-pattern-icon">🤖↓🤖</div>
+              <div class="ma-pattern-title">Sub-agentes</div>
+              <div class="ma-pattern-desc">Agente principal lanza sub-tareas en background. Resultado notificado al completar. Requiere <code>maxSpawnDepth ≥ 1</code>.</div>
+            </div>
+            <div class="ma-pattern-card">
+              <div class="ma-pattern-icon">🤖⇄🤖</div>
+              <div class="ma-pattern-title">Agent-to-Agent</div>
+              <div class="ma-pattern-desc">Agentes se consultan entre sí via <code>sessions_send</code>. Requiere habilitar A2A. Límite de turnos: maxPingPongTurns.</div>
+            </div>
+            <div class="ma-pattern-card">
+              <div class="ma-pattern-icon">🤖↗🖥️</div>
+              <div class="ma-pattern-title">ACP (OpenCode/Codex)</div>
+              <div class="ma-pattern-desc">Lanza harnesses externos (opencode, pi, claude code) con thread binding. Ideal para tareas de programación profunda.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Local Models section ── -->
+      <section id="section-models" class="section">
+        <div class="section-header">
+          <div>
+            <div class="section-title">Modelos Locales</div>
+            <div class="section-subtitle">Ollama · Hardware · Capacidades · Skills</div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn btn-ghost btn-sm" onclick="fetchLocalModels(); fetchModelCapabilities()">
+              <i data-lucide="refresh-cw" style="width:13px;height:13px"></i> Actualizar
+            </button>
+          </div>
+        </div>
+
+        <!-- Hardware + disk KPIs -->
+        <div class="kpi-row" id="models-kpi-row">
+          <div class="kpi-card">
+            <div class="kpi-label">Ollama</div>
+            <div class="kpi-value" id="models-ollama-status">—</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">CPU / Chip</div>
+            <div class="kpi-value" id="models-cpu">—</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">RAM total</div>
+            <div class="kpi-value" id="models-ram">—</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Disco modelos</div>
+            <div class="kpi-value" id="models-disk">—</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Modelos instalados</div>
+            <div class="kpi-value" id="models-count">—</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Activos ahora</div>
+            <div class="kpi-value" id="models-running-count">—</div>
+          </div>
+        </div>
+
+        <!-- Models table -->
+        <div class="card" style="margin-top:16px">
+          <div class="card-title" style="margin-bottom:12px">
+            <i data-lucide="cpu" style="width:14px;height:14px;vertical-align:-2px"></i>
+            Modelos instalados
+            <span class="model-compat-legend">
+              <span class="compat-badge compat-ok">✓ Corre bien</span>
+              <span class="compat-badge compat-warn">⚠ Ajustado</span>
+              <span class="compat-badge compat-no">✕ Sin RAM suficiente</span>
+              <span class="compat-badge compat-loaded">▶ Cargado</span>
+            </span>
+          </div>
+          <div style="overflow-x:auto">
+            <table class="table" id="models-table">
+              <thead>
+                <tr>
+                  <th>Modelo</th>
+                  <th>Familia</th>
+                  <th>Parámetros</th>
+                  <th>Cuantización</th>
+                  <th>Tamaño disco</th>
+                  <th>RAM req.</th>
+                  <th>Compatibilidad</th>
+                  <th>Estado</th>
+                </tr>
+              </thead>
+              <tbody id="models-tbody">
+                <tr><td colspan="8" style="text-align:center;padding:24px"><div class="skeleton skeleton-text" style="margin:auto;width:200px"></div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Currently loaded models -->
+        <div class="card" style="margin-top:16px" id="models-loaded-card">
+          <div class="card-title" style="margin-bottom:12px">
+            <i data-lucide="zap" style="width:14px;height:14px;vertical-align:-2px"></i>
+            Modelos en memoria ahora
+          </div>
+          <div id="models-loaded-list" style="color:var(--color-text-muted);font-size:13px">Sin modelos activos</div>
+        </div>
+
+        <!-- canirun.ai-style recommendation -->
+        <div class="card" style="margin-top:16px">
+          <div class="card-title" style="margin-bottom:12px">
+            <i data-lucide="lightbulb" style="width:14px;height:14px;vertical-align:-2px"></i>
+            Recomendaciones para tu hardware
+          </div>
+          <div id="models-recommendations" style="color:var(--color-text-muted);font-size:13px">Cargando...</div>
+        </div>
+
+        <!-- Capabilities cards -->
+        <div class="card" style="margin-top:16px">
+          <div class="card-title" style="margin-bottom:14px">
+            <i data-lucide="sparkles" style="width:14px;height:14px;vertical-align:-2px"></i>
+            Capacidades por modelo
+            <span style="font-size:11px;font-weight:400;color:var(--color-text-muted);margin-left:8px">qué puede hacer cada uno</span>
+          </div>
+          <div id="models-caps-grid" class="models-caps-grid">
+            <div class="skeleton skeleton-text" style="height:120px;border-radius:8px"></div>
+            <div class="skeleton skeleton-text" style="height:120px;border-radius:8px"></div>
+            <div class="skeleton skeleton-text" style="height:120px;border-radius:8px"></div>
+          </div>
+        </div>
+
+        <!-- Skills matching -->
+        <div class="card" style="margin-top:16px">
+          <div class="card-title" style="margin-bottom:14px">
+            <i data-lucide="puzzle" style="width:14px;height:14px;vertical-align:-2px"></i>
+            Skills instaladas
+            <span style="font-size:11px;font-weight:400;color:var(--color-text-muted);margin-left:8px">~/.claude/skills · cuál modelo usar con cada skill</span>
+          </div>
+          <!-- Filter by model -->
+          <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+            <span style="font-size:12px;color:var(--color-text-muted)">Filtrar por modelo:</span>
+            <div id="skills-model-filter" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+            <button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="filterSkillsByModel(null)">Todos</button>
+          </div>
+          <div id="models-skills-grid" class="models-skills-grid">
+            <div class="skeleton skeleton-text" style="height:80px;border-radius:6px"></div>
+            <div class="skeleton skeleton-text" style="height:80px;border-radius:6px"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Programmer Mode section ── -->
+      <section id="section-programmer" class="section">
+        <div class="section-header">
+          <div>
+            <div class="section-title">Modo Programador</div>
+            <div class="section-subtitle">OpenCode · Sesiones · Proyectos</div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn btn-ghost btn-sm" onclick="fetchOpenCodeStatus()">
+              <i data-lucide="refresh-cw" style="width:13px;height:13px"></i> Actualizar
+            </button>
+          </div>
+        </div>
+
+        <!-- OpenCode status KPIs -->
+        <div class="kpi-row">
+          <div class="kpi-card">
+            <div class="kpi-label">OpenCode</div>
+            <div class="kpi-value" id="oc-status">—</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Versión</div>
+            <div class="kpi-value" id="oc-version">—</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Puerto</div>
+            <div class="kpi-value" id="oc-port">—</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Sesiones</div>
+            <div class="kpi-value" id="oc-sessions-count">—</div>
+          </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="card" style="margin-top:16px">
+          <div class="card-title" style="margin-bottom:12px">Controles del servidor</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <select id="oc-project-select" style="min-width:220px">
+              <option value="">Selecciona proyecto...</option>
+            </select>
+            <button class="btn btn-primary btn-sm" onclick="startOpenCode()">
+              <i data-lucide="play" style="width:13px;height:13px"></i> Iniciar OpenCode
+            </button>
+            <button class="btn btn-ghost btn-sm" onclick="stopOpenCode()">
+              <i data-lucide="square" style="width:13px;height:13px"></i> Detener
+            </button>
+            <a id="oc-open-link" href="#" target="_blank" rel="noreferrer" class="btn btn-ghost btn-sm" style="display:none">
+              <i data-lucide="external-link" style="width:13px;height:13px"></i> Abrir UI
+            </a>
+          </div>
+          <p id="oc-action-msg" style="font-size:12px;color:var(--color-text-muted);margin-top:8px;min-height:16px"></p>
+        </div>
+
+        <!-- Sessions list -->
+        <div class="card" style="margin-top:16px">
+          <div class="card-title" style="margin-bottom:12px">
+            <i data-lucide="history" style="width:14px;height:14px;vertical-align:-2px"></i>
+            Sesiones recientes
+          </div>
+          <div id="oc-sessions-list" style="color:var(--color-text-muted);font-size:13px">Cargando sesiones...</div>
+        </div>
+
+        <!-- Server logs -->
+        <div class="card" style="margin-top:16px">
+          <div class="card-title" style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+            <span><i data-lucide="terminal" style="width:14px;height:14px;vertical-align:-2px"></i> Logs del servidor</span>
+            <button class="btn btn-ghost btn-sm" onclick="fetchOpenCodeLogs()">
+              <i data-lucide="refresh-cw" style="width:12px;height:12px"></i>
+            </button>
+          </div>
+          <pre id="oc-logs" style="font-size:11px;max-height:260px;overflow-y:auto;background:var(--color-bg);padding:10px;border-radius:6px;margin:0;white-space:pre-wrap;word-break:break-all">—</pre>
+        </div>
+      </section>
+
     </main>
   </div>
 </div>
@@ -670,7 +1290,7 @@
     if (s) s.classList.add('active');
     const btn = document.querySelector('[data-section="' + section + '"]');
     if (btn) btn.classList.add('active');
-    const titles = { dashboard: 'Dashboard', workroom: 'Workroom', audit: 'Audit', crons: 'Cronjobs', autonomous: 'Agente Autónomo', settings: 'Ajustes' };
+    const titles = { dashboard: 'Dashboard', workroom: 'Workroom', audit: 'Audit', crons: 'Cronjobs', autonomous: 'Agente Autónomo', multiagent: 'Multi-Agente', models: 'Modelos Locales', programmer: 'Modo Programador', settings: 'Ajustes' };
     const ht = document.getElementById('header-title');
     if (ht) ht.textContent = titles[section] || section;
     closeSidebar();

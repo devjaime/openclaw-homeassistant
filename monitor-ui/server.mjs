@@ -56,8 +56,209 @@ const EXTERNAL_COST_LEDGER = process.env.EXTERNAL_COST_LEDGER || '/Users/devjaim
 const USAGE_RESET_STATE_PATH = process.env.USAGE_RESET_STATE_PATH || path.join(process.env.HOME || '', '.openclaw', 'monitor-usage-reset.json');
 const OPENROUTER_CREDITS_URL = process.env.OPENROUTER_CREDITS_URL || 'https://openrouter.ai/api/v1/credits';
 const HA_SECRETS_ENV_PATH = process.env.HA_SECRETS_ENV_PATH || path.join(process.env.HOME || '', '.openclaw', 'secrets.env');
-const MODE_LOCAL_MODEL = process.env.MODE_LOCAL_MODEL || 'custom-127-0-0-1-11434/qwen2.5:7b';
-const MODE_CLOUD_MODEL = process.env.MODE_CLOUD_MODEL || 'openrouter/minimax/minimax-m2.5';
+const MODE_LOCAL_MODEL = process.env.MODE_LOCAL_MODEL || 'custom-127-0-0-1-11434/minimax-m2.5:cloud';
+const MODE_CLOUD_MODEL = process.env.MODE_CLOUD_MODEL || 'openrouter/minimax/minimax-m2.7';
+const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
+const OPENCODE_BIN = process.env.OPENCODE_BIN || '/Users/devjaime/.opencode/bin/opencode';
+const OPENCODE_PORT = Number(process.env.OPENCODE_PORT || 4096);
+const CLAUDE_SKILLS_DIR = process.env.CLAUDE_SKILLS_DIR || path.join(process.env.HOME || '', '.claude', 'skills');
+
+// ── Model capability database ─────────────────────────────────────────────────
+// Keyed by partial model name (lowercased). First match wins.
+const MODEL_CAPABILITY_DB = [
+  {
+    match: ['qwen2.5vl', 'qwen2-vl', 'llava', 'minicpm-v', 'moondream', 'bakllava', 'cogvlm'],
+    caps: ['multimodal', 'vision', 'text'],
+    badge: '👁️ Multimodal',
+    description: 'Entiende imágenes y texto. Ideal para analizar screenshots, diagramas, fotos y documentos visuales.',
+    strengths: ['Análisis de imágenes', 'OCR visual', 'Descripción de UI', 'Respuesta a preguntas sobre fotos'],
+    bestFor: ['vision', 'multimodal', 'performance'],
+    notGoodFor: ['code-generation', 'math'],
+  },
+  {
+    match: ['deepseek-coder', 'codegemma', 'codellama', 'starcoder', 'wizardcoder', 'phind-codellama'],
+    caps: ['code', 'text'],
+    badge: '💻 Código',
+    description: 'Especialista en programación. Optimizado para generación, revisión y debug de código.',
+    strengths: ['Completado de código', 'Debugging', 'Code review', 'Refactoring'],
+    bestFor: ['github-actions', 'vitest', 'playwright-testing', 'vite'],
+    notGoodFor: ['vision', 'long-context'],
+  },
+  {
+    match: ['deepseek-r1', 'qwq', 'o1', 'o3', 'thinking'],
+    caps: ['reasoning', 'math', 'text'],
+    badge: '🧠 Razonamiento',
+    description: 'Modelo con cadena de pensamiento extendida (chain-of-thought). Ideal para problemas complejos, matemáticas y análisis.',
+    strengths: ['Problemas matemáticos', 'Lógica compleja', 'Análisis profundo', 'Planificación'],
+    bestFor: ['data-sql-optimization', 'database-schema-design', 'coverage-analysis'],
+    notGoodFor: ['speed', 'vision'],
+  },
+  {
+    match: ['llama3.1', 'llama3.2', 'llama3.3', 'llama-3'],
+    caps: ['text', 'chat', 'tools'],
+    badge: '🦙 Propósito general',
+    description: 'Meta Llama 3.1 — equilibrio entre calidad y velocidad. Buen soporte de herramientas (function calling) y contexto largo.',
+    strengths: ['Conversación fluida', 'Function calling', 'Resumen', 'Contexto largo (128k)'],
+    bestFor: ['i18n-localization', 'performance', 'find-skills'],
+    notGoodFor: ['vision', 'code-expert'],
+  },
+  {
+    match: ['qwen2.5:', 'qwen2.5-'],
+    caps: ['text', 'chat', 'multilingual', 'code'],
+    badge: '🌐 Multilingüe + código',
+    description: 'Qwen 2.5 — excelente en chino e inglés, buen razonamiento y código. 128k contexto en versiones mayores.',
+    strengths: ['Español/Inglés/Chino', 'Código Python/JS', 'Instrucciones precisas', 'Larga memoria'],
+    bestFor: ['i18n-localization', 'github-actions', 'supabase-workflow', 'vercel-deployment'],
+    notGoodFor: ['vision'],
+  },
+  {
+    match: ['minimax-m2.7'],
+    caps: ['text', 'chat', 'reasoning', 'long-context', 'tools'],
+    badge: '🚀 Cloud · M2.7 (nuevo)',
+    description: 'MiniMax M2.7 — sucesor de M2.5 con mayor precisión de razonamiento, context 204k y mejor function calling.',
+    strengths: ['Razonamiento mejorado vs M2.5', 'Contexto 204k tokens', 'Function calling avanzado', 'Menor latencia en streaming', 'Multilingüe'],
+    bestFor: ['data-sql-optimization', 'database-schema-design', 'postgresql-expert', 'supabase-expert', 'github-actions'],
+    notGoodFor: ['local'],
+  },
+  {
+    match: ['minimax-m2.5', 'minimax-m2.1'],
+    caps: ['text', 'chat', 'reasoning', 'long-context'],
+    badge: '☁️ Cloud · Razonamiento avanzado',
+    description: 'MiniMax M2.5 — modelo cloud de 230B con razonamiento avanzado y contexto ultra-largo. Alta calidad en tareas complejas.',
+    strengths: ['Razonamiento profundo', 'Contexto 1M tokens', 'Análisis de documentos', 'Multilingüe'],
+    bestFor: ['data-sql-optimization', 'database-schema-design', 'postgresql-expert', 'supabase-expert'],
+    notGoodFor: ['speed', 'local'],
+  },
+  {
+    match: ['kimi-k2.5', 'kimi'],
+    caps: ['text', 'chat', 'reasoning', 'long-context'],
+    badge: '☁️ Cloud · Contexto largo',
+    description: 'Kimi K2.5 — especializado en contextos muy largos (hasta 2M tokens). Ideal para analizar codebases completas.',
+    strengths: ['Contexto 2M tokens', 'Análisis de repos', 'Documentación técnica', 'Research'],
+    bestFor: ['coverage-analysis', 'playwright-testing', 'supabase-workflow'],
+    notGoodFor: ['speed', 'local'],
+  },
+  {
+    match: ['minimax-32k'],
+    caps: ['text', 'chat', 'long-context'],
+    badge: '📄 Contexto 32k',
+    description: 'Variante MiniMax optimizada para 32k tokens de contexto. Buena para documentos medianos.',
+    strengths: ['Documentos largos', 'Resumen', 'Análisis de logs'],
+    bestFor: ['i18n-localization', 'performance'],
+    notGoodFor: ['code-expert', 'vision'],
+  },
+  // Fallback
+  {
+    match: [],
+    caps: ['text', 'chat'],
+    badge: '💬 Propósito general',
+    description: 'Modelo de lenguaje general. Apto para chat, resumen, redacción y tareas de texto.',
+    strengths: ['Conversación', 'Resumen', 'Redacción'],
+    bestFor: [],
+    notGoodFor: [],
+  },
+];
+
+function getModelCapabilities(modelName) {
+  const lower = String(modelName || '').toLowerCase();
+  for (const entry of MODEL_CAPABILITY_DB) {
+    if (entry.match.length === 0) continue; // skip fallback in loop
+    if (entry.match.some((kw) => lower.includes(kw))) return entry;
+  }
+  return MODEL_CAPABILITY_DB[MODEL_CAPABILITY_DB.length - 1]; // fallback
+}
+
+// ── Claude skills reader ───────────────────────────────────────────────────────
+function readClaudeSkills() {
+  const skills = [];
+  try {
+    if (!fs.existsSync(CLAUDE_SKILLS_DIR)) return skills;
+    const dirs = fs.readdirSync(CLAUDE_SKILLS_DIR).filter((d) => {
+      try { return fs.statSync(path.join(CLAUDE_SKILLS_DIR, d)).isDirectory(); } catch { return false; }
+    });
+    for (const dir of dirs) {
+      const base = path.join(CLAUDE_SKILLS_DIR, dir);
+      const skillFile = fs.existsSync(path.join(base, 'SKILL.md'))
+        ? path.join(base, 'SKILL.md')
+        : fs.existsSync(path.join(base, 'skill.md'))
+          ? path.join(base, 'skill.md')
+          : null;
+      if (!skillFile) continue;
+      try {
+        const content = fs.readFileSync(skillFile, 'utf8');
+        // Extract frontmatter description
+        const descMatch = content.match(/^description:\s*["']?(.+?)["']?\s*$/m);
+        const nameMatch = content.match(/^name:\s*(.+)\s*$/m);
+        const versionMatch = content.match(/^(?:version|metadata:\s*\n\s+version):\s*["']?(.+?)["']?\s*$/m);
+        const desc = descMatch?.[1]?.trim() || '';
+        const name = nameMatch?.[1]?.trim() || dir;
+        // Infer category tags from name/description
+        const tags = inferSkillTags(name, desc);
+        skills.push({ id: dir, name, description: desc.slice(0, 140), tags, version: versionMatch?.[1]?.trim() || '' });
+      } catch { /* skip unreadable */ }
+    }
+  } catch { /* ignore */ }
+  return skills;
+}
+
+function inferSkillTags(name, desc) {
+  const text = `${name} ${desc}`.toLowerCase();
+  const tags = [];
+  if (/test|vitest|playwright|coverage|jest/.test(text)) tags.push('testing');
+  if (/sql|postgres|database|schema|supabase/.test(text)) tags.push('database');
+  if (/deploy|vercel|ci|cd|github.actions|pipeline/.test(text)) tags.push('devops');
+  if (/react|next|vite|tailwind|css|frontend|ui/.test(text)) tags.push('frontend');
+  if (/performance|optimiz|speed|bundle/.test(text)) tags.push('performance');
+  if (/i18n|translat|locale|multilingual/.test(text)) tags.push('multilingual');
+  if (/video|remotion|animation/.test(text)) tags.push('multimedia');
+  if (/code|program|develop/.test(text)) tags.push('code');
+  if (tags.length === 0) tags.push('general');
+  return tags;
+}
+
+// RAM requirements per model size class (GB unified memory, Apple Silicon)
+const MODEL_SIZE_RAM = {
+  '1b': 1.5, '3b': 2.5, '7b': 5, '8b': 6, '13b': 9, '14b': 10,
+  '30b': 20, '32b': 22, '70b': 45, '72b': 48, '110b': 70, '405b': 230,
+};
+
+function parseModelSizeGb(name) {
+  const m = String(name).toLowerCase().match(/(\d+(?:\.\d+)?)b/);
+  if (!m) return null;
+  const param = parseFloat(m[1]);
+  // Approximate Q4 size: ~0.55 bytes/param for 4-bit quant → GB
+  return Math.round(param * 0.55 * 10) / 10;
+}
+
+function modelRamRequirementGb(name) {
+  const lower = String(name).toLowerCase();
+  for (const [key, gb] of Object.entries(MODEL_SIZE_RAM)) {
+    if (lower.includes(`:${key}`) || lower.endsWith(key) || lower.includes(`-${key}-`) || lower.includes(`_${key}`)) {
+      return gb;
+    }
+  }
+  // Try raw number parse
+  const m = lower.match(/[:\-_](\d+)b/);
+  if (m) {
+    const params = Number(m[1]);
+    return Math.round(params * 0.55 * 10) / 10;
+  }
+  return null;
+}
+
+function fetchOllamaJson(apiPath) {
+  return new Promise((resolve) => {
+    const ollamaPort = Number(new URL(OLLAMA_URL).port || 11434);
+    const req = http.request({ hostname: '127.0.0.1', port: ollamaPort, path: apiPath, method: 'GET' }, (res) => {
+      let body = '';
+      res.on('data', (d) => { body += d; });
+      res.on('end', () => resolve(safeJsonParse(body, null)));
+    });
+    req.on('error', () => resolve(null));
+    req.setTimeout(3000, () => { req.destroy(); resolve(null); });
+    req.end();
+  });
+}
 const RESOURCE_HISTORY_PATH = process.env.RESOURCE_HISTORY_PATH || path.join(process.env.HOME || '', '.openclaw', 'monitor-resource-history.jsonl');
 const RESOURCE_SAMPLE_INTERVAL_MS = Number(process.env.RESOURCE_SAMPLE_INTERVAL_MS || 60000);
 const RESOURCE_RETENTION_DAYS = Number(process.env.RESOURCE_RETENTION_DAYS || 35);
@@ -146,6 +347,18 @@ const MODEL_PRICE_PER_TOKEN_USD = {
   'minimax/minimax-m2.5': {
     input: 0.0000003,
     output: 0.0000011,
+    cacheRead: 0,
+    cacheWrite: 0,
+  },
+  'minimax/minimax-m2.7': {
+    input: 0.0000003,
+    output: 0.0000012,
+    cacheRead: 0,
+    cacheWrite: 0,
+  },
+  'openrouter/minimax/minimax-m2.7': {
+    input: 0.0000003,
+    output: 0.0000012,
     cacheRead: 0,
     cacheWrite: 0,
   },
@@ -462,6 +675,39 @@ function collectResourceUsage(runtimePort) {
       homeassistant: collectDockerUsage('homeassistant'),
       n8n: collectDockerUsage('n8n'),
     },
+  };
+}
+
+function collectProcessNetworkTrace(pid) {
+  const procPid = n(pid);
+  if (!procPid) {
+    return { ok: false, reason: 'pid unavailable', connections: [], listeners: [] };
+  }
+  const out = run(`lsof -nP -a -p ${procPid} -iTCP`);
+  if (isErr(out) || !out) {
+    return { ok: false, reason: String(out || 'lsof failed'), connections: [], listeners: [] };
+  }
+  const lines = String(out).split('\n').slice(1).filter(Boolean);
+  const listeners = [];
+  const connections = [];
+  for (const line of lines) {
+    const nameMatch = line.match(/([^\s]+)\s+\((LISTEN|ESTABLISHED|CLOSE_WAIT|SYN_SENT|TIME_WAIT)\)$/);
+    if (!nameMatch) continue;
+    const endpoint = String(nameMatch[1] || '').trim();
+    const state = String(nameMatch[2] || '').trim();
+    const row = {
+      endpoint,
+      state,
+      raw: line.trim(),
+    };
+    if (state === 'LISTEN') listeners.push(row);
+    else connections.push(row);
+  }
+  return {
+    ok: true,
+    pid: procPid,
+    listeners: listeners.slice(0, 40),
+    connections: connections.slice(0, 80),
   };
 }
 
@@ -1285,8 +1531,27 @@ function staticFile(res, relPath, contentType = 'text/plain; charset=utf-8') {
     return;
   }
   const data = fs.readFileSync(file);
-  res.writeHead(200, { 'Content-Type': contentType });
+  res.writeHead(200, {
+    'Content-Type': contentType,
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0',
+  });
   res.end(data);
+}
+
+function publicAssetsVersion() {
+  const files = ['app.js', 'workroom.js', 'styles.css'].map((f) => path.join(PUBLIC_DIR, f));
+  let latest = 0;
+  for (const file of files) {
+    try {
+      const mtime = fs.statSync(file).mtimeMs || 0;
+      if (mtime > latest) latest = mtime;
+    } catch {
+      // ignore missing asset
+    }
+  }
+  return String(Math.floor(latest || Date.now()));
 }
 
 /** Sirve un HTML inyectando window.DASHBOARD_TOKEN antes de </head> (task 5.3). */
@@ -1298,10 +1563,20 @@ function serveHtmlWithToken(res, relPath) {
     return;
   }
   let html = fs.readFileSync(file, 'utf8');
+  const version = publicAssetsVersion();
+  html = html
+    .replace(/href="\/styles\.css(?:\?[^"]*)?"/g, `href="/styles.css?v=${version}"`)
+    .replace(/src="\/app\.js(?:\?[^"]*)?"/g, `src="/app.js?v=${version}"`)
+    .replace(/src="\/workroom\.js(?:\?[^"]*)?"/g, `src="/workroom.js?v=${version}"`);
   // Inyectar token como variable global antes de cualquier script del cliente
   const tokenScript = `<script>window.DASHBOARD_TOKEN=${JSON.stringify(DASHBOARD_TOKEN || '')};</script>`;
   html = html.replace('</head>', `${tokenScript}\n</head>`);
-  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.writeHead(200, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0',
+  });
   res.end(html);
 }
 
@@ -1614,6 +1889,7 @@ async function buildStatus() {
   // Quality cloud models — shown first, recommended for complex tasks
   const PREFERRED_CLOUD = new Set([
     'openrouter/moonshotai/kimi-k2.5',
+    'openrouter/minimax/minimax-m2.7',
     'openrouter/minimax/minimax-m2.5',
     'openrouter/google/gemini-3-flash-preview',
     'google/gemini-2.5-flash-lite',
@@ -1623,7 +1899,7 @@ async function buildStatus() {
     'huggingface/moonshotai/Kimi-K2.5',
   ]);
   // Models to skip from UI (internal/delivery/bare usage)
-  const SKIP_MODELS = new Set(['openclaw/delivery-mirror', 'minimax/minimax-m2.5', 'moonshotai/kimi-k2.5']);
+  const SKIP_MODELS = new Set(['openclaw/delivery-mirror', 'minimax/minimax-m2.5', 'minimax/minimax-m2.7', 'moonshotai/kimi-k2.5']);
   const enrichModel = (m) => {
     const key = m.model;
     const isLocal = key.startsWith('custom-127-0-0-1-11434/');
@@ -1644,18 +1920,22 @@ async function buildStatus() {
       if (a.tier !== b.tier) return a.tier === 'cloud' ? -1 : 1;
       return String(a.model).localeCompare(String(b.model));
     });
+  const primaryLower = String(modelPrimary || '').toLowerCase();
   const modelModeGuess = modelPrimary === MODE_LOCAL_MODEL
-    ? 'local'
+    ? 'noche (minimax 2.5)'
     : modelPrimary === MODE_CLOUD_MODEL
-      ? 'cloud'
-      : modelPrimary.includes('gemini')
-    ? 'dia (gemini)'
-    : modelPrimary.includes('minimax') || modelPrimary.includes('MiniMax')
-      ? 'potente (minmax)'
-      : modelPrimary.includes('qwen') || modelPrimary.includes('custom-127-0-0-1-11434')
-        ? 'noche/local (ollama)'
-        : 'custom';
+      ? 'dia (minimax 2.7)'
+      : primaryLower.includes('minimax-m2.7')
+        ? 'dia (minimax 2.7)'
+        : primaryLower.includes('minimax-m2.5')
+          ? 'noche/ollama (minimax 2.5)'
+          : primaryLower.includes('gemini')
+            ? 'dia (gemini)'
+            : primaryLower.includes('qwen') || primaryLower.includes('custom-127-0-0-1-11434')
+              ? 'noche/local (ollama)'
+              : 'custom';
   const resources = collectResourceUsage(runtimePort);
+  const networkTrace = collectProcessNetworkTrace(resources?.services?.openclaw?.pid);
   await writeResourceSample(resources);
   await pruneResourceHistory();
   const resourceRows = await readResourceHistory();
@@ -1726,6 +2006,7 @@ async function buildStatus() {
       series24h: resourceStats.series24h,
       totalSamples: resourceStats.totalSamples,
     },
+    networkTrace,
     usage: usageStats,
     security,
     projects: projectStats,
@@ -1738,6 +2019,28 @@ async function buildStatus() {
       homeassistant: haLogs.slice(-120),
     },
   };
+}
+
+const STATUS_PAYLOAD_TTL_MS = 5 * 60 * 1000;
+let statusPayloadCache = null;
+let statusPayloadAtMs = 0;
+let statusPayloadInflight = null;
+
+async function getStatusPayload(force = false) {
+  const now = Date.now();
+  const fresh = statusPayloadCache && ((now - statusPayloadAtMs) < STATUS_PAYLOAD_TTL_MS);
+  if (!force && fresh) return statusPayloadCache;
+  if (!force && statusPayloadInflight) return statusPayloadInflight;
+  statusPayloadInflight = (async () => {
+    const payload = await buildStatus();
+    statusPayloadCache = payload;
+    statusPayloadAtMs = Date.now();
+    return payload;
+  })()
+    .finally(() => {
+      statusPayloadInflight = null;
+    });
+  return statusPayloadInflight;
 }
 
 async function setModelMode(mode) {
@@ -1914,7 +2217,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (u.pathname === '/api/status') {
-    const payload = await buildStatus();
+    const force = u.searchParams.get('force') === '1';
+    const payload = await getStatusPayload(force);
     sendJson(res, 200, payload);
     return;
   }
@@ -2217,7 +2521,7 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname === '/api/autonomous/start' && req.method === 'POST') {
     const body = await readJsonBody(req);
     const goal = String(body?.goal || '').trim();
-    const model = String(body?.model || 'openrouter/minimax/minimax-m2.5').trim();
+    const model = String(body?.model || 'openrouter/minimax/minimax-m2.7').trim();
     const maxIterations = Math.min(50, Math.max(5, Number(body?.maxIterations || 15)));
     const riskLevel = ['LOW', 'MEDIUM'].includes(String(body?.riskLevel || '').toUpperCase())
       ? String(body.riskLevel).toUpperCase() : 'MEDIUM';
@@ -2227,9 +2531,9 @@ const server = http.createServer(async (req, res) => {
     const verifierModel = model.includes('minimax')
       ? 'openrouter/moonshotai/kimi-k2.5'
       : model.includes('kimi')
-        ? 'openrouter/minimax/minimax-m2.5'
+        ? 'openrouter/minimax/minimax-m2.7'
         : model.includes('gemini') || model.includes('google')
-          ? 'openrouter/minimax/minimax-m2.5'
+          ? 'openrouter/minimax/minimax-m2.7'
           : 'openrouter/moonshotai/kimi-k2.5';
     const sessionId = createAutoSession({ goal, model, verifierModel, maxIterations, riskLevel });
     startAutoLoop(sessionId);
@@ -2294,6 +2598,350 @@ const server = http.createServer(async (req, res) => {
     res.write(`data: ${JSON.stringify({ type: 'connected', sessionId })}\n\n`);
     subscribeAutoSSE(sessionId, res);
     req.on('close', () => unsubscribeAutoSSE(sessionId, res));
+    return;
+  }
+
+  // ── Multi-Agent: agents, sessions, subagents, spawn ──────────────────────────
+  if (u.pathname === '/api/multiagent/agents' && req.method === 'GET') {
+    const out = runShell(`"${OPENCLAW_BIN}" agents list --json`, 10000);
+    const agents = safeJsonParse(out.output, []);
+    const b = runShell(`"${OPENCLAW_BIN}" agents bindings --json`, 8000);
+    const bindings = safeJsonParse(b.output, []);
+    sendJson(res, 200, { ok: true, agents: Array.isArray(agents) ? agents : [], bindings: Array.isArray(bindings) ? bindings : [] });
+    return;
+  }
+
+  if (u.pathname === '/api/multiagent/sessions' && req.method === 'GET') {
+    const agentId = u.searchParams.get('agentId') || '';
+    const limit = Math.min(50, Number(u.searchParams.get('limit') || 20));
+    const sessionsDir = path.join(process.env.HOME || '', '.openclaw', 'agents');
+    const sessions = [];
+    try {
+      if (fs.existsSync(sessionsDir)) {
+        const agentDirs = fs.readdirSync(sessionsDir).filter(Boolean);
+        for (const aid of agentDirs) {
+          if (agentId && aid !== agentId) continue;
+          const sessDir = path.join(sessionsDir, aid, 'sessions');
+          if (!fs.existsSync(sessDir)) continue;
+          const files = fs.readdirSync(sessDir)
+            .filter((f) => f.endsWith('.jsonl'))
+            .map((f) => ({ f, mtime: fs.statSync(path.join(sessDir, f)).mtime }))
+            .sort((a, b) => b.mtime - a.mtime)
+            .slice(0, limit)
+            .map(({ f }) => f);
+          for (const file of files) {
+            try {
+              const lines = fs.readFileSync(path.join(sessDir, file), 'utf8').split('\n').filter(Boolean);
+              const first = safeJsonParse(lines[0], {});
+              const last = safeJsonParse(lines[lines.length - 1], {});
+              const sessionId = file.replace('.jsonl', '');
+              sessions.push({
+                agentId: aid,
+                sessionId,
+                sessionKey: first?.sessionKey || sessionId,
+                turns: lines.length,
+                createdAt: first?.ts || first?.timestamp || null,
+                updatedAt: last?.ts || last?.timestamp || null,
+                model: first?.model || null,
+              });
+            } catch { /* skip unreadable */ }
+          }
+        }
+      }
+    } catch { /* ignore */ }
+    sessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    sendJson(res, 200, { ok: true, sessions: sessions.slice(0, limit) });
+    return;
+  }
+
+  if (u.pathname === '/api/multiagent/spawn' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const task = String(body?.task || '').trim();
+    const agentId = String(body?.agentId || 'main').trim();
+    const model = String(body?.model || '').trim();
+    const thinking = String(body?.thinking || 'low').trim();
+    if (!task) { sendJson(res, 400, { ok: false, message: 'task requerido' }); return; }
+    const sessionId = `spawn_${Date.now()}`;
+    const modelFlag = model ? `--model "${model}"` : '';
+    const thinkingFlag = `--thinking ${thinking}`;
+    const cmd = `"${OPENCLAW_BIN}" agent --agent ${agentId} --session-id ${sessionId} --message "$SPAWN_TASK" ${modelFlag} ${thinkingFlag} --json`;
+    runShellAsync(cmd, { ...buildSafeEnv(), SPAWN_TASK: task }, 300000)
+      .then((out) => console.log(`[spawn] session=${sessionId} ok=${out.ok}`))
+      .catch((e) => console.error(`[spawn] session=${sessionId}`, e.message));
+    sendJson(res, 202, { ok: true, sessionId, agentId, pending: true, message: 'Sub-agente lanzado' });
+    return;
+  }
+
+  if (u.pathname === '/api/multiagent/config' && req.method === 'GET') {
+    const cfg = await readOpenClawConfig();
+    sendJson(res, 200, {
+      ok: true,
+      agentToAgentEnabled: cfg?.tools?.agentToAgent?.enabled || false,
+      maxSpawnDepth: cfg?.agents?.defaults?.subagents?.maxSpawnDepth ?? 1,
+      sessionVisibility: cfg?.tools?.sessions?.visibility || 'tree',
+      maxPingPongTurns: cfg?.session?.agentToAgent?.maxPingPongTurns ?? 5,
+      threadBindingsEnabled: cfg?.session?.threadBindings?.enabled || false,
+      acpEnabled: cfg?.acp?.enabled || false,
+    });
+    return;
+  }
+
+  if (u.pathname === '/api/multiagent/config' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const changes = [];
+    if (typeof body.agentToAgentEnabled === 'boolean') {
+      const out = runShell(`"${OPENCLAW_BIN}" config set tools.agentToAgent.enabled ${body.agentToAgentEnabled} --json`, 8000);
+      changes.push({ key: 'tools.agentToAgent.enabled', ok: out.ok });
+    }
+    if (typeof body.maxSpawnDepth === 'number') {
+      const depth = Math.min(5, Math.max(1, body.maxSpawnDepth));
+      const out = runShell(`"${OPENCLAW_BIN}" config set agents.defaults.subagents.maxSpawnDepth ${depth} --json`, 8000);
+      changes.push({ key: 'agents.defaults.subagents.maxSpawnDepth', ok: out.ok });
+    }
+    sendJson(res, 200, { ok: true, changes });
+    return;
+  }
+
+  // ── Neo4j Memory Bridge proxy ─────────────────────────────────────────────────
+  const NEO4J_BRIDGE_PORT = Number(process.env.NEO4J_BRIDGE_PORT || 7575);
+  const NEO4J_BRIDGE_URL = `http://127.0.0.1:${NEO4J_BRIDGE_PORT}`;
+
+  if (u.pathname === '/api/neo4j/health' && req.method === 'GET') {
+    try {
+      const r = await fetch(`${NEO4J_BRIDGE_URL}/memory/health`, { signal: AbortSignal.timeout(3000) });
+      const data = await r.json();
+      sendJson(res, 200, { ok: true, ...data });
+    } catch (e) {
+      sendJson(res, 200, { ok: false, error: 'Bridge no disponible', detail: e.message });
+    }
+    return;
+  }
+
+  if (u.pathname === '/api/neo4j/stats' && req.method === 'GET') {
+    try {
+      const r = await fetch(`${NEO4J_BRIDGE_URL}/memory/stats`, { signal: AbortSignal.timeout(5000) });
+      const data = await r.json();
+      sendJson(res, 200, { ok: true, ...data });
+    } catch (e) {
+      sendJson(res, 200, { ok: false, error: 'Bridge no disponible' });
+    }
+    return;
+  }
+
+  if (u.pathname === '/api/neo4j/recall' && req.method === 'POST') {
+    const body = await readBody(req);
+    try {
+      const parsed = JSON.parse(body);
+      const r = await fetch(`${NEO4J_BRIDGE_URL}/memory/recall`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: parsed.query || '', limit: parsed.limit || 5 }),
+        signal: AbortSignal.timeout(10000),
+      });
+      const data = await r.json();
+      sendJson(res, 200, { ok: true, ...data });
+    } catch (e) {
+      sendJson(res, 200, { ok: false, error: e.message });
+    }
+    return;
+  }
+
+  if (u.pathname === '/api/neo4j/store' && req.method === 'POST') {
+    const body = await readBody(req);
+    try {
+      const parsed = JSON.parse(body);
+      const r = await fetch(`${NEO4J_BRIDGE_URL}/memory/store`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(parsed),
+        signal: AbortSignal.timeout(10000),
+      });
+      const data = await r.json();
+      sendJson(res, 200, { ok: true, ...data });
+    } catch (e) {
+      sendJson(res, 200, { ok: false, error: e.message });
+    }
+    return;
+  }
+
+  if (u.pathname === '/api/neo4j/query' && req.method === 'POST') {
+    const body = await readBody(req);
+    try {
+      const parsed = JSON.parse(body);
+      const r = await fetch(`${NEO4J_BRIDGE_URL}/memory/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cypher: parsed.cypher || '', params: parsed.params, limit: parsed.limit || 25 }),
+        signal: AbortSignal.timeout(10000),
+      });
+      const data = await r.json();
+      sendJson(res, 200, { ok: true, ...data });
+    } catch (e) {
+      sendJson(res, 200, { ok: false, error: e.message });
+    }
+    return;
+  }
+
+  // ── Skills list ───────────────────────────────────────────────────────────────
+  if (u.pathname === '/api/skills/list' && req.method === 'GET') {
+    const skills = readClaudeSkills();
+    sendJson(res, 200, { ok: true, skills, dir: CLAUDE_SKILLS_DIR });
+    return;
+  }
+
+  // ── Model capabilities + skill matching ──────────────────────────────────────
+  if (u.pathname === '/api/models/capabilities' && req.method === 'GET') {
+    const tagsData = await fetchOllamaJson('/api/tags');
+    const skills = readClaudeSkills();
+    const models = (tagsData?.models || []).map((m) => {
+      const caps = getModelCapabilities(m.name);
+      // Match skills: skill is relevant if any skill tag matches model caps OR skill id is in bestFor
+      const matchedSkills = skills.filter((s) => {
+        if (caps.bestFor.includes(s.id)) return true;
+        return s.tags.some((t) => caps.caps.includes(t));
+      }).map((s) => ({ id: s.id, name: s.name, description: s.description.slice(0, 80) }));
+      return {
+        name: m.name,
+        family: m.details?.family || '',
+        parameterSize: m.details?.parameter_size || '',
+        quantization: m.details?.quantization_level || '',
+        sizeGb: parseFloat((m.size / 1_073_741_824).toFixed(2)),
+        caps: caps.caps,
+        badge: caps.badge,
+        description: caps.description,
+        strengths: caps.strengths,
+        matchedSkills,
+        isCloud: m.name.includes(':cloud') || m.size === 0,
+      };
+    });
+    sendJson(res, 200, { ok: true, models, skills });
+    return;
+  }
+
+  // ── Local models: Ollama + hardware compatibility ─────────────────────────────
+  if (u.pathname === '/api/models/local' && req.method === 'GET') {
+    const [tagsData, psData] = await Promise.all([
+      fetchOllamaJson('/api/tags'),
+      fetchOllamaJson('/api/ps'),
+    ]);
+    const ollamaRunning = tagsData !== null;
+    const installedModels = (tagsData?.models || []).map((m) => {
+      const sizeGb = parseFloat((m.size / 1_073_741_824).toFixed(2));
+      const ramReq = modelRamRequirementGb(m.name);
+      return {
+        name: m.name,
+        sizeGb,
+        modifiedAt: m.modified_at,
+        digest: (m.digest || '').slice(0, 12),
+        family: m.details?.family || '',
+        parameterSize: m.details?.parameter_size || '',
+        quantization: m.details?.quantization_level || '',
+        ramRequiredGb: ramReq,
+      };
+    });
+    const runningModels = (psData?.models || []).map((m) => ({
+      name: m.name,
+      sizeVram: parseFloat((m.size_vram / 1_073_741_824).toFixed(2)),
+      expiresAt: m.expires_at,
+    }));
+    // System hardware info
+    let totalRamGb = null;
+    let cpuBrand = '';
+    try {
+      totalRamGb = Math.round(Number(execSync('sysctl -n hw.memsize', { timeout: 2000 }).toString().trim()) / 1_073_741_824);
+    } catch { /* ignore */ }
+    try {
+      cpuBrand = execSync('sysctl -n machdep.cpu.brand_string', { timeout: 2000 }).toString().trim();
+    } catch { /* ignore */ }
+    // Disk usage: sum sizes reported by Ollama API (actual files may be in container/VM)
+    const totalBytes = (tagsData?.models || []).reduce((sum, m) => sum + (m.size || 0), 0);
+    const ollamaDiskGb = totalBytes > 0 ? `${(totalBytes / 1_073_741_824).toFixed(1)} GB` : '—';
+    // Mark compatibility per model
+    const modelsWithCompat = installedModels.map((m) => {
+      let canRun = null;
+      let warning = null;
+      if (totalRamGb !== null && m.ramRequiredGb !== null) {
+        const headroom = totalRamGb - m.ramRequiredGb;
+        canRun = headroom >= 1;
+        if (!canRun) warning = `Necesita ~${m.ramRequiredGb}GB, tienes ${totalRamGb}GB`;
+        else if (headroom < 3) warning = `Ajustado (${headroom.toFixed(1)}GB libre tras carga)`;
+      }
+      const isLoaded = runningModels.some((r) => r.name === m.name);
+      return { ...m, canRun, warning, isLoaded };
+    });
+    sendJson(res, 200, {
+      ok: true,
+      ollamaRunning,
+      hardware: { totalRamGb, cpuBrand },
+      ollamaDiskUsed: ollamaDiskGb,
+      models: modelsWithCompat,
+      runningModels,
+    });
+    return;
+  }
+
+  // ── OpenCode integration ───────────────────────────────────────────────────────
+  if (u.pathname === '/api/opencode/status' && req.method === 'GET') {
+    const isRunning = await checkPort('127.0.0.1', OPENCODE_PORT);
+    let version = '';
+    try {
+      version = execSync(`"${OPENCODE_BIN}" --version 2>/dev/null || echo ""`, { timeout: 3000 }).toString().trim();
+    } catch { /* ignore */ }
+    // List recent sessions via opencode CLI
+    let sessions = [];
+    try {
+      const out = runShell(`"${OPENCODE_BIN}" session list --json 2>/dev/null`, 8000);
+      if (out.ok) sessions = safeJsonParse(out.output, []) || [];
+    } catch { /* ignore */ }
+    sendJson(res, 200, {
+      ok: true,
+      running: isRunning,
+      port: OPENCODE_PORT,
+      version,
+      url: `http://127.0.0.1:${OPENCODE_PORT}`,
+      sessions: Array.isArray(sessions) ? sessions.slice(0, 20) : [],
+      projects: PROJECT_REPOS,
+    });
+    return;
+  }
+
+  if (u.pathname === '/api/opencode/start' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const projectPath = String(body?.projectPath || PROJECT_REPOS[0]?.path || '').trim();
+    // Validate project path is in the allowed list
+    const allowed = PROJECT_REPOS.map((p) => p.path);
+    if (!allowed.includes(projectPath)) {
+      sendJson(res, 400, { ok: false, message: 'Proyecto no permitido' });
+      return;
+    }
+    const already = await checkPort('127.0.0.1', OPENCODE_PORT);
+    if (already) {
+      sendJson(res, 200, { ok: true, message: 'OpenCode ya está corriendo', url: `http://127.0.0.1:${OPENCODE_PORT}` });
+      return;
+    }
+    const cmd = `nohup "${OPENCODE_BIN}" serve --port ${OPENCODE_PORT} --hostname 127.0.0.1 > /tmp/opencode-serve.log 2>&1 &`;
+    const result = runShell(cmd);
+    await new Promise((r) => setTimeout(r, 1500));
+    const running = await checkPort('127.0.0.1', OPENCODE_PORT);
+    sendJson(res, running ? 200 : 500, { ok: running, message: running ? 'OpenCode iniciado' : 'No pudo iniciar', url: `http://127.0.0.1:${OPENCODE_PORT}` });
+    return;
+  }
+
+  if (u.pathname === '/api/opencode/stop' && req.method === 'POST') {
+    runShell(`pkill -f "opencode serve" || pkill -f "opencode web" || true`);
+    sendJson(res, 200, { ok: true, message: 'OpenCode detenido' });
+    return;
+  }
+
+  if (u.pathname === '/api/opencode/logs' && req.method === 'GET') {
+    let lines = [];
+    try {
+      const logPath = '/tmp/opencode-serve.log';
+      if (fs.existsSync(logPath)) {
+        lines = fs.readFileSync(logPath, 'utf8').split('\n').slice(-100).filter(Boolean);
+      }
+    } catch { /* ignore */ }
+    sendJson(res, 200, { ok: true, lines });
     return;
   }
 

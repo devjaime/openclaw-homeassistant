@@ -59,6 +59,23 @@
             "maxTokens": 4096
           },
           {
+            "id": "minimax-m2.7:cloud",
+            "name": "minimax-m2.7:cloud (Custom Provider)",
+            "api": "ollama",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 204800,
+            "maxTokens": 8192
+          },
+          {
             "id": "qwen2.5:7b",
             "name": "qwen2.5:7b (Custom Provider)",
             "reasoning": false,
@@ -200,6 +217,38 @@
             },
             "contextWindow": 131072,
             "maxTokens": 16384
+          },
+          {
+            "id": "minimax/minimax-m2.5",
+            "name": "MiniMax M2.5 (OpenRouter)",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0.3,
+              "output": 1.1,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 196608,
+            "maxTokens": 8192
+          },
+          {
+            "id": "minimax/minimax-m2.7",
+            "name": "MiniMax M2.7 (OpenRouter)",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0.3,
+              "output": 1.2,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 204800,
+            "maxTokens": 8192
           }
         ]
       },
@@ -256,7 +305,12 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "huggingface/moonshotai/Kimi-K2.5"
+        "primary": "openrouter/minimax/minimax-m2.7",
+        "fallbacks": [
+          "custom-127-0-0-1-11434/minimax-m2.7:cloud",
+          "custom-127-0-0-1-11434/minimax-m2.5:cloud",
+          "huggingface/moonshotai/Kimi-K2.5"
+        ]
       },
       "models": {
         "google/gemini-2.5-flash-lite": {
@@ -270,6 +324,12 @@
         },
         "openrouter/openai/gpt-oss-120b:free": {
           "alias": "gpt-oss"
+        },
+        "openrouter/minimax/minimax-m2.7": {
+          "alias": "modo_cloud"
+        },
+        "openrouter/minimax/minimax-m2.5": {
+          "alias": "minimax25_openrouter"
         },
         "minimax-portal/MiniMax-M2.5": {
           "alias": "minimax"
@@ -285,6 +345,12 @@
         },
         "custom-127-0-0-1-11434/qwen2.5vl:7b": {
           "alias": "qwen2.5vl"
+        },
+        "custom-127-0-0-1-11434/minimax-m2.7:cloud": {
+          "alias": "modo_cloud_ollama"
+        },
+        "custom-127-0-0-1-11434/minimax-m2.5:cloud": {
+          "alias": "modo_local"
         },
         "custom-127-0-0-1-11434/llama3.1:8b": {
           "alias": "llama"

@@ -1,4 +1,107 @@
 // ── helpers ──────────────────────────────────────────────────────────────────
+const SECTION_AUTO_REFRESH_MS = 5 * 60 * 1000; // 5 min
+const STATUS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 min
+const SECTION_CACHE_TTL_MS = 5 * 60 * 1000; // 5 min
+const AUTO_REFRESH_ENABLED_KEY = 'monitor_auto_refresh_enabled';
+const AUTO_REFRESH_INTERVAL_KEY = 'monitor_auto_refresh_interval_ms';
+const DEFAULT_AUTO_REFRESH_INTERVAL_MS = 120000;
+const ACTIVITY_REFRESH_DEBOUNCE_MS = 12000;
+
+let inactivityRefreshTimerId = null;
+let autoRefreshEnabled = true;
+let autoRefreshIntervalMs = DEFAULT_AUTO_REFRESH_INTERVAL_MS;
+let lastUserActivityAtMs = Date.now();
+let worldUserLocation = null;
+let worldUserLocationState = 'idle';
+let worldUserLocationMessage = '';
+const TOOLBAR_ADVANCED_COLLAPSED_KEY = 'monitor_toolbar_advanced_collapsed';
+let toolbarAdvancedCollapsed = true;
+const sectionFetchedAt = new Map();
+let statusCache = { data: null, fetchedAt: 0, signature: '' };
+let worldMap = null;
+let worldNodeLayer = null;
+let worldLinkLayer = null;
+let worldMapHasFitted = false;
+let worldMapLastOriginKey = '';
+
+function isUserEditing() {
+  const el = document.activeElement;
+  if (!el) return false;
+  const tag = String(el.tagName || '').toUpperCase();
+  return (
+    tag === 'INPUT' ||
+    tag === 'TEXTAREA' ||
+    tag === 'SELECT' ||
+    el.isContentEditable === true
+  );
+}
+
+function getIntervalLabel(ms) {
+  const n = Number(ms || DEFAULT_AUTO_REFRESH_INTERVAL_MS);
+  if (!Number.isFinite(n) || n <= 0) return '2m';
+  if (n < 60000) return `${Math.round(n / 1000)}s`;
+  return `${Math.round(n / 60000)}m`;
+}
+
+function normalizeAutoRefreshInterval(ms) {
+  const n = Number(ms);
+  const allowed = [30000, 60000, 120000, 300000];
+  return allowed.includes(n) ? n : DEFAULT_AUTO_REFRESH_INTERVAL_MS;
+}
+
+function updateToolbarAdvancedUi() {
+  const box = document.getElementById('toolbarAdvanced');
+  const btn = document.getElementById('toolbarToggleBtn');
+  if (box) box.classList.toggle('collapsed', toolbarAdvancedCollapsed);
+  if (btn) btn.setAttribute('aria-expanded', toolbarAdvancedCollapsed ? 'false' : 'true');
+}
+
+function renderAutoRefreshStatus() {
+  const statusEl = document.getElementById('autoRefreshStatus');
+  const toggleEl = document.getElementById('autoRefreshToggle');
+  const intervalEl = document.getElementById('autoRefreshInterval');
+  if (toggleEl) toggleEl.checked = !!autoRefreshEnabled;
+  if (intervalEl) intervalEl.value = String(autoRefreshIntervalMs);
+  if (!statusEl) return;
+  const state = autoRefreshEnabled ? t('autoOn') : t('autoOff');
+  const effectiveIntervalMs = Math.max(autoRefreshIntervalMs, STATUS_CACHE_TTL_MS);
+  statusEl.textContent = t('autoRefreshStatus', {
+    state,
+    interval: getIntervalLabel(effectiveIntervalMs),
+  });
+}
+
+function resetInactivityRefreshTimer() {
+  if (inactivityRefreshTimerId) clearTimeout(inactivityRefreshTimerId);
+  inactivityRefreshTimerId = null;
+  if (!autoRefreshEnabled) return;
+  const effectiveIntervalMs = Math.max(autoRefreshIntervalMs, STATUS_CACHE_TTL_MS);
+  inactivityRefreshTimerId = setTimeout(async () => {
+    if (!autoRefreshEnabled) return;
+    if (isUserEditing()) {
+      resetInactivityRefreshTimer();
+      return;
+    }
+    await load({ showLoading: false });
+    await refreshUpdateStatus();
+    resetInactivityRefreshTimer();
+  }, effectiveIntervalMs);
+}
+
+function registerUserActivity() {
+  if (!autoRefreshEnabled) return;
+  const now = Date.now();
+  if ((now - lastUserActivityAtMs) < ACTIVITY_REFRESH_DEBOUNCE_MS) return;
+  lastUserActivityAtMs = now;
+  resetInactivityRefreshTimer();
+}
+
+function scheduleGlobalRefreshTimers() {
+  if (inactivityRefreshTimerId) clearTimeout(inactivityRefreshTimerId);
+  inactivityRefreshTimerId = null;
+  if (!autoRefreshEnabled) return;
+  resetInactivityRefreshTimer();
+}
 
 /** Fetch wrapper que incluye X-Dashboard-Token si está configurado (task 5.1). */
 function apiFetch(path, options = {}) {
@@ -11,8 +114,21 @@ function apiFetch(path, options = {}) {
 // ── Navigation (shell layout) ─────────────────────────────────────────────────
 const SECTION_TITLES = {
   dashboard: 'Dashboard', workroom: 'Workroom',
-  audit: 'Audit de Prompts', crons: 'Cronjobs', settings: 'Ajustes',
+  audit: 'Audit de Prompts', crons: 'Cronjobs',
+  multiagent: 'Multi-Agente', models: 'Modelos Locales',
+  programmer: 'Modo Programador', settings: 'Ajustes',
 };
+
+function shouldFetchSection(sectionId, force = false) {
+  if (force) return true;
+  const last = n(sectionFetchedAt.get(sectionId));
+  if (!last) return true;
+  return (Date.now() - last) >= SECTION_CACHE_TTL_MS;
+}
+
+function markSectionFetched(sectionId) {
+  sectionFetchedAt.set(sectionId, Date.now());
+}
 
 function navigateTo(sectionId) {
   const sections = document.querySelectorAll('.section');
@@ -26,9 +142,27 @@ function navigateTo(sectionId) {
     if (navItem) navItem.classList.add('active');
     const titleEl = document.getElementById('header-title');
     if (titleEl) titleEl.textContent = SECTION_TITLES[sectionId] || sectionId;
-    if (sectionId === 'crons') fetchCrons();
-    if (sectionId === 'audit') fetchAuditLog();
-    if (sectionId === 'autonomous') { fetchAutoHistory(); fetchAutoStatus(); }
+    if (sectionId === 'crons' && shouldFetchSection('crons')) {
+      fetchCrons().finally(() => markSectionFetched('crons'));
+    }
+    if (sectionId === 'audit' && shouldFetchSection('audit')) {
+      fetchAuditLog().finally(() => markSectionFetched('audit'));
+    }
+    if (sectionId === 'autonomous' && shouldFetchSection('autonomous')) {
+      Promise.all([fetchAutoHistory(), fetchAutoStatus()]).finally(() => markSectionFetched('autonomous'));
+    }
+    if (sectionId === 'multiagent' && shouldFetchSection('multiagent')) {
+      Promise.all([fetchMultiAgent(), fetchMultiAgentSessions()]).finally(() => markSectionFetched('multiagent'));
+    }
+    if (sectionId === 'models' && shouldFetchSection('models')) {
+      Promise.all([fetchLocalModels(), fetchModelCapabilities()]).finally(() => markSectionFetched('models'));
+    }
+    if (sectionId === 'programmer' && shouldFetchSection('programmer')) {
+      fetchOpenCodeStatus().finally(() => markSectionFetched('programmer'));
+    }
+    if (sectionId === 'neo4j' && shouldFetchSection('neo4j')) {
+      fetchNeo4jStatus().finally(() => markSectionFetched('neo4j'));
+    }
     closeSidebar();
   };
   if (document.startViewTransition) {
@@ -269,20 +403,22 @@ async function submitAudit(action) {
 // ── Init ──────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   initLucide();
-  // Poll audit pending badge every 30s
+  // Poll audit pending badge
   setInterval(async () => {
+    if (isUserEditing()) return;
     try {
       const res = await apiFetch('/api/audit/pending', { cache: 'no-store' });
       const data = await res.json();
       const badge = document.getElementById('audit-pending-badge');
       if (badge) { const c = (data.entries||[]).length; badge.textContent=c; badge.style.display=c>0?'':'none'; }
     } catch {}
-  }, 30000);
-  // Poll crons every 30s when visible
+  }, SECTION_AUTO_REFRESH_MS);
+  // Poll crons when visible
   setInterval(() => {
+    if (isUserEditing()) return;
     const croSection = document.getElementById('section-crons');
     if (croSection?.classList.contains('active')) fetchCrons();
-  }, 30000);
+  }, SECTION_AUTO_REFRESH_MS);
 });
 
 const LANG_STORAGE_KEY = 'monitor_lang';
@@ -374,6 +510,32 @@ const I18N = {
     writeMessageBeforeSend: 'Escribe un mensaje antes de enviar.',
     sending: 'Enviando...',
     messageSent: 'Mensaje enviado.',
+    autoRefresh: 'Auto-refresh',
+    autoOn: 'ON',
+    autoOff: 'OFF',
+    autoRefreshStatus: 'Auto: {state} · {interval}',
+    dashOverview: 'Overview',
+    dashObservability: 'Observabilidad',
+    dashCosts: 'Costos y uso',
+    dashSecurity: 'Seguridad',
+    dashIot: 'IoT y hogar',
+    dashOps: 'Operaciones',
+    dashLogs: 'Logs y eventos',
+    worldMapTitle: 'Mapa global de actividad',
+    worldMapNodes: 'Nodos activos',
+    worldMapLastEvent: 'Último evento',
+    worldMapMode: 'Modo runtime',
+    worldMapMapState: 'Estado mapa',
+    worldMapHealthy: 'Saludable',
+    worldMapDegraded: 'Con alertas',
+    worldMapOffline: 'Caído',
+    worldMapUseMyLocation: 'Usar mi ubicación',
+    worldMapLocating: 'Obteniendo ubicación...',
+    worldMapLocationOk: 'Ubicación actualizada',
+    worldMapLocationError: 'No se pudo obtener ubicación',
+    worldMapNoGeo: 'Geolocalización no disponible',
+    advancedControls: 'Avanzado',
+    traceNoEvents: 'Sin eventos de red recientes',
     lastUpdate: 'Última actualización',
     copyError: 'No se pudo copiar token',
     copyToken: '🔑 Copiar token',
@@ -392,7 +554,7 @@ const I18N = {
     statusError: 'Error: {error}',
     activeState: 'activo',
     headerTitle: 'Panel de Monitoreo',
-    headerSubtitle: 'OpenClaw + Home Assistant · actualización cada 30s',
+    headerSubtitle: 'OpenClaw + Home Assistant · refresco por inactividad (5 min)',
     refreshBtn: '↻ Actualizar',
     resetMetricsBtn: '⟲ Reset métricas',
     resetMetricsTitle: 'Resetear contadores de tokens y costos desde ahora',
@@ -594,6 +756,32 @@ const I18N = {
     writeMessageBeforeSend: 'Type a message before sending.',
     sending: 'Sending...',
     messageSent: 'Message sent.',
+    autoRefresh: 'Auto-refresh',
+    autoOn: 'ON',
+    autoOff: 'OFF',
+    autoRefreshStatus: 'Auto: {state} · {interval}',
+    dashOverview: 'Overview',
+    dashObservability: 'Observability',
+    dashCosts: 'Costs and usage',
+    dashSecurity: 'Security',
+    dashIot: 'IoT and home',
+    dashOps: 'Operations',
+    dashLogs: 'Logs and events',
+    worldMapTitle: 'Global activity map',
+    worldMapNodes: 'Active nodes',
+    worldMapLastEvent: 'Last event',
+    worldMapMode: 'Runtime mode',
+    worldMapMapState: 'Map status',
+    worldMapHealthy: 'Healthy',
+    worldMapDegraded: 'With alerts',
+    worldMapOffline: 'Offline',
+    worldMapUseMyLocation: 'Use my location',
+    worldMapLocating: 'Getting location...',
+    worldMapLocationOk: 'Location updated',
+    worldMapLocationError: 'Could not get location',
+    worldMapNoGeo: 'Geolocation not available',
+    advancedControls: 'Advanced',
+    traceNoEvents: 'No recent network events',
     lastUpdate: 'Last update',
     copyError: 'Could not copy token',
     copyToken: '🔑 Copy token',
@@ -612,7 +800,7 @@ const I18N = {
     statusError: 'Error: {error}',
     activeState: 'active',
     headerTitle: 'Monitoring Dashboard',
-    headerSubtitle: 'OpenClaw + Home Assistant · refresh every 30s',
+    headerSubtitle: 'OpenClaw + Home Assistant · idle refresh every 5 min',
     refreshBtn: '↻ Refresh',
     resetMetricsBtn: '⟲ Reset metrics',
     resetMetricsTitle: 'Reset token and cost counters from now',
@@ -786,6 +974,8 @@ function applyI18nToDom() {
     const key = el.getAttribute('data-i18n-placeholder');
     if (key) el.placeholder = t(key);
   });
+  renderAutoRefreshStatus();
+  updateWorldMapLocateUi();
 }
 
 // ── log coloring ──────────────────────────────────────────────────────────────
@@ -865,28 +1055,407 @@ function renderTelegram(lines) {
   }).join('');
 }
 
+function updateWorldMapLocateUi() {
+  const btn = document.getElementById('worldMapLocateBtn');
+  const status = document.getElementById('worldMapLocateStatus');
+  if (btn) btn.textContent = `📍 ${t('worldMapUseMyLocation')}`;
+  if (!status) return;
+  if (worldUserLocationState === 'resolving') status.textContent = t('worldMapLocating');
+  else if (worldUserLocationState === 'ok') status.textContent = worldUserLocationMessage || t('worldMapLocationOk');
+  else if (worldUserLocationState === 'error') status.textContent = worldUserLocationMessage || t('worldMapLocationError');
+  else status.textContent = '';
+}
+
+function requestWorldUserLocation() {
+  if (!navigator.geolocation) {
+    worldUserLocationState = 'error';
+    worldUserLocationMessage = t('worldMapNoGeo');
+    updateWorldMapLocateUi();
+    return;
+  }
+  worldUserLocationState = 'resolving';
+  worldUserLocationMessage = '';
+  updateWorldMapLocateUi();
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      worldUserLocation = {
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+      };
+      worldUserLocationState = 'ok';
+      worldUserLocationMessage = `${t('worldMapLocationOk')} (${pos.coords.latitude.toFixed(3)}, ${pos.coords.longitude.toFixed(3)})`;
+      updateWorldMapLocateUi();
+    },
+    () => {
+      worldUserLocationState = 'error';
+      worldUserLocationMessage = t('worldMapLocationError');
+      updateWorldMapLocateUi();
+    },
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 180000 }
+  );
+}
+
+function inferHostGeo(host = '') {
+  const h = String(host || '').toLowerCase();
+  if (!h) return { latitude: 0, longitude: 0, label: 'unknown' };
+  if (h === 'localhost' || h.startsWith('127.') || h.startsWith('192.168.') || h.startsWith('10.') || /^172\.(1[6-9]|2\d|3[0-1])\./.test(h)) {
+    const base = worldUserLocation || { latitude: -33.4489, longitude: -70.6693 };
+    return { latitude: base.latitude, longitude: base.longitude, label: 'Local network' };
+  }
+  if (h.includes('.cl') || h.includes('chile') || h.includes('scl')) return { latitude: -33.4489, longitude: -70.6693, label: 'Chile' };
+  if (h.includes('openrouter') || h.includes('api.openai') || h.includes('github')) return { latitude: 39.0438, longitude: -77.4874, label: 'US-East' };
+  if (h.includes('google') || h.includes('gemini')) return { latitude: 37.422, longitude: -122.084, label: 'US-West' };
+  if (h.includes('telegram')) return { latitude: 25.7617, longitude: -80.1918, label: 'Telegram edge' };
+  if (h.includes('aws')) return { latitude: 39.0438, longitude: -77.4874, label: 'AWS us-east' };
+  if (h.includes('azure')) return { latitude: 52.3676, longitude: 4.9041, label: 'Azure EU' };
+  if (h.includes('ollama')) return { latitude: 37.7749, longitude: -122.4194, label: 'Ollama cloud' };
+  return { latitude: 39.0438, longitude: -77.4874, label: 'Internet edge' };
+}
+
+function extractHostFromEndpoint(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const noArrow = raw.includes('->') ? raw.split('->').pop() : raw;
+  const normalized = noArrow
+    .replace(/^https?:\/\//i, '')
+    .replace(/^wss?:\/\//i, '')
+    .trim();
+  const token = normalized.split(/[/?#\s]/)[0] || '';
+  const hostMatch = token.match(/(localhost|(?:\d{1,3}\.){3}\d{1,3}|[a-z0-9.-]+\.[a-z]{2,})/i);
+  return hostMatch ? String(hostMatch[1]).toLowerCase() : '';
+}
+
+function parseTraceTarget(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return { host: '', port: '', protocol: '', path: '' };
+  const part = raw.includes('->') ? raw.split('->').pop() : raw;
+  const normalized = String(part || '').trim();
+
+  if (/^https?:\/\//i.test(normalized) || /^wss?:\/\//i.test(normalized)) {
+    try {
+      const u = new URL(normalized);
+      return {
+        host: String(u.hostname || '').toLowerCase(),
+        port: String(u.port || ''),
+        protocol: String(u.protocol || '').replace(':', '').toLowerCase(),
+        path: String(u.pathname || ''),
+      };
+    } catch {
+      // fall through
+    }
+  }
+
+  const token = normalized.split(/[/?#\s]/)[0] || '';
+  const m = token.match(/^(localhost|(?:\d{1,3}\.){3}\d{1,3}|[a-z0-9.-]+\.[a-z]{2,})(?::(\d{2,5}))?$/i);
+  if (m) {
+    return {
+      host: String(m[1] || '').toLowerCase(),
+      port: String(m[2] || ''),
+      protocol: '',
+      path: '',
+    };
+  }
+  return { host: '', port: '', protocol: '', path: '' };
+}
+
+function shouldIncludeTraceEvent(type, target) {
+  const meta = parseTraceTarget(target);
+  const host = String(meta.host || '').toLowerCase();
+  if (!host) return false;
+
+  const isPrivateIp = /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(host);
+  if (isPrivateIp || host === 'localhost') return true;
+  if (type === 'listen' || type === 'conn' || type === 'port' || type === 'ws') return true;
+
+  // Keep map trace operationally focused: skip browsing/content links.
+  if (type === 'web') {
+    if (/github\.com$|gitlab\.com$|medium\.com$|youtube\.com$|x\.com$|twitter\.com$/.test(host)) return false;
+    if (host.includes('openrouter') || host.includes('openai') || host.includes('google') || host.includes('telegram') || host.includes('ollama')) return true;
+    return false;
+  }
+  return true;
+}
+
+function formatTraceTarget(type, target) {
+  const meta = parseTraceTarget(target);
+  if (!meta.host) return String(target || '').slice(0, 72);
+  if (meta.port) return `${meta.host}:${meta.port}`;
+  return meta.host;
+}
+
+function ensureWorldMap() {
+  if (worldMap || !window.L) return worldMap;
+  const container = document.getElementById('worldLeafletMap');
+  if (!container) return null;
+  worldMap = L.map(container, {
+    zoomControl: true,
+    attributionControl: true,
+    worldCopyJump: true,
+    preferCanvas: true,
+    minZoom: 2,
+    maxZoom: 8,
+  }).setView([-25.0, -72.0], 3);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    maxZoom: 18,
+    attribution: '&copy; OpenStreetMap &copy; CARTO',
+  }).addTo(worldMap);
+  worldNodeLayer = L.layerGroup().addTo(worldMap);
+  worldLinkLayer = L.layerGroup().addTo(worldMap);
+  return worldMap;
+}
+
+function spreadNodeCoordinates(nodes) {
+  const byPos = new Map();
+  for (const node of nodes) {
+    const key = `${Number(node.latitude).toFixed(3)}|${Number(node.longitude).toFixed(3)}`;
+    if (!byPos.has(key)) byPos.set(key, []);
+    byPos.get(key).push(node);
+  }
+  const out = [];
+  for (const group of byPos.values()) {
+    if (group.length === 1) {
+      out.push({ ...group[0], displayLat: group[0].latitude, displayLon: group[0].longitude });
+      continue;
+    }
+    const base = group[0];
+    const radiusKm = group.length > 6 ? 42 : 28;
+    const latFactor = Math.max(0.2, Math.cos((Number(base.latitude) * Math.PI) / 180));
+    group.forEach((node, idx) => {
+      const angle = (Math.PI * 2 * idx) / group.length;
+      const deltaLat = (radiusKm / 111) * Math.sin(angle);
+      const deltaLon = (radiusKm / (111 * latFactor)) * Math.cos(angle);
+      out.push({
+        ...node,
+        displayLat: node.latitude + deltaLat,
+        displayLon: node.longitude + deltaLon,
+      });
+    });
+  }
+  return out;
+}
+
+function extractNetworkEventsFromData(data) {
+  const liveConnections = Array.isArray(data?.networkTrace?.connections) ? data.networkTrace.connections : [];
+  const liveListeners = Array.isArray(data?.networkTrace?.listeners) ? data.networkTrace.listeners : [];
+  const direct = [];
+  const pushDirect = (type, target) => {
+    if (!shouldIncludeTraceEvent(type, target)) return;
+    direct.push({ type, target: formatTraceTarget(type, target), ts: '' });
+  };
+  for (const row of liveConnections) {
+    const endpoint = String(row?.endpoint || '');
+    if (!endpoint) continue;
+    pushDirect('conn', endpoint);
+  }
+  for (const row of liveListeners) {
+    const endpoint = String(row?.endpoint || '');
+    if (!endpoint) continue;
+    pushDirect('listen', endpoint);
+  }
+
+  const rows = [
+    ...(Array.isArray(data?.logs?.openclaw) ? data.logs.openclaw : []),
+    ...(Array.isArray(data?.logs?.homeassistant) ? data.logs.homeassistant : []),
+  ].slice(-240);
+
+  const urlRe = /\bhttps?:\/\/[^\s'")]+/gi;
+  const wsRe = /\bwss?:\/\/[^\s'")]+/gi;
+  const hostPortRe = /\b(?:localhost|127\.0\.0\.1|(?:\d{1,3}\.){3}\d{1,3}|[a-z0-9.-]+\.[a-z]{2,})(?::\d{2,5})\b/gi;
+
+  const out = [...direct];
+  for (const line of rows) {
+    const ts = extractTelegramTs(line);
+    const push = (type, target) => {
+      if (!shouldIncludeTraceEvent(type, target)) return;
+      out.push({ type, target: formatTraceTarget(type, target), ts });
+    };
+    const urls = line.match(urlRe) || [];
+    const sockets = line.match(wsRe) || [];
+    const hostPorts = line.match(hostPortRe) || [];
+    urls.forEach((u) => push('web', u));
+    sockets.forEach((u) => push('ws', u));
+    hostPorts.forEach((p) => push('port', p));
+  }
+  const dedupe = new Set();
+  return out.filter((e) => {
+    const key = `${e.type}|${e.target}`;
+    if (dedupe.has(key)) return false;
+    dedupe.add(key);
+    return true;
+  }).slice(0, 8);
+}
+
+function renderWorldMap(data) {
+  const statsEl = document.getElementById('worldMapStats');
+  const legendEl = document.getElementById('worldMapLegend');
+  const traceEl = document.getElementById('worldMapTrace');
+  if (!statsEl || !legendEl || !traceEl) return;
+  const map = ensureWorldMap();
+  if (!map || !worldNodeLayer || !worldLinkLayer) return;
+
+  const hasRecentErrors = n(data?.activity?.recentErrorsCount) > 0;
+  const gwUp = !!data?.openclaw?.listening;
+  const haUp = String(data?.homeassistant?.status || '').toLowerCase().includes('http 200');
+  const tgUp = !!data?.telegram?.botUser;
+  const mode = String(data?.openclaw?.modelModeGuess || 'all');
+  const fallbackLocal = { latitude: -33.4489, longitude: -70.6693 }; // Santiago
+  const localOrigin = worldUserLocation || data?.apple?.mapCenter || fallbackLocal;
+
+  const appleDevices = Array.isArray(data?.apple?.devices) ? data.apple.devices : [];
+  const iphone = appleDevices.find((d) => /iphone/i.test(String(d?.name || d?.entityId || '')) && d?.latitude != null && d?.longitude != null);
+  const watch = appleDevices.find((d) => /watch/i.test(String(d?.name || d?.entityId || '')) && d?.latitude != null && d?.longitude != null);
+  const modelPrimary = String(data?.openclaw?.modelPrimary || '');
+  const isLocalModel = isStrictLocalModelKey(modelPrimary);
+
+  const cloudAnchor = modelPrimary.includes('openrouter')
+    ? { label: 'OpenRouter · us-east', latitude: 39.0438, longitude: -77.4874 }
+    : modelPrimary.includes(':cloud')
+      ? { label: 'Ollama Cloud · us-west', latitude: 37.7749, longitude: -122.4194 }
+      : { label: 'Model runtime', latitude: localOrigin.latitude, longitude: localOrigin.longitude };
+
+  const dynamicNodes = [
+    { name: 'Tu conexión', latitude: Number(localOrigin.latitude), longitude: Number(localOrigin.longitude), ok: true, kind: 'origin' },
+    { name: 'Mac Mini · OpenClaw', latitude: Number(localOrigin.latitude), longitude: Number(localOrigin.longitude), ok: gwUp, kind: 'origin' },
+    { name: 'Home Assistant', latitude: Number(localOrigin.latitude), longitude: Number(localOrigin.longitude), ok: haUp, kind: 'origin' },
+    {
+      name: cloudAnchor.label,
+      latitude: Number(cloudAnchor.latitude),
+      longitude: Number(cloudAnchor.longitude),
+      ok: isLocalModel ? true : !hasRecentErrors,
+      kind: 'runtime',
+    },
+    { name: 'Telegram', latitude: 25.7617, longitude: -80.1918, ok: tgUp, kind: 'telegram' },
+  ];
+  if (iphone) dynamicNodes.push({
+    name: `iPhone · ${iphone.name || iphone.entityId || ''}`.trim(),
+    latitude: Number(iphone.latitude),
+    longitude: Number(iphone.longitude),
+    ok: true,
+    kind: 'device',
+  });
+  if (watch) dynamicNodes.push({
+    name: `Apple Watch · ${watch.name || watch.entityId || ''}`.trim(),
+    latitude: Number(watch.latitude),
+    longitude: Number(watch.longitude),
+    ok: true,
+    kind: 'device',
+  });
+
+  const networkEvents = extractNetworkEventsFromData(data);
+  for (const ev of networkEvents) {
+    const normalizedTarget = String(ev.target || '');
+    const host = extractHostFromEndpoint(normalizedTarget);
+    if (!host) continue;
+    const geo = inferHostGeo(host);
+    dynamicNodes.push({
+      name: `${ev.type.toUpperCase()} · ${host}`,
+      latitude: Number(geo.latitude),
+      longitude: Number(geo.longitude),
+      ok: true,
+      trace: true,
+      kind: 'trace',
+    });
+  }
+
+  const nodes = spreadNodeCoordinates(dynamicNodes.filter((n) => Number.isFinite(n.latitude) && Number.isFinite(n.longitude)));
+  worldNodeLayer.clearLayers();
+  worldLinkLayer.clearLayers();
+
+  const overall = !gwUp ? 'bad' : (hasRecentErrors ? 'warn' : 'ok');
+  const activeNodes = nodes.filter((x) => x.ok).length;
+  const totalNodes = nodes.length;
+  const lastEvent = data?.activity?.latest?.timestampMs
+    ? new Date(data.activity.latest.timestampMs).toLocaleTimeString(getLocale())
+    : '-';
+
+  for (const node of nodes) {
+    const color = node.ok ? (node.trace ? '#ff8a3d' : '#f5b233') : '#ef4444';
+    L.circleMarker([node.displayLat, node.displayLon], {
+      radius: node.trace ? 4 : 6,
+      color,
+      fillColor: color,
+      fillOpacity: 0.85,
+      weight: 1.5,
+    })
+      .bindTooltip(node.name, { direction: 'top', opacity: 0.92 })
+      .addTo(worldNodeLayer);
+  }
+
+  const originPoint = [Number(localOrigin.latitude), Number(localOrigin.longitude)];
+  nodes
+    .filter((n) => n.trace || n.kind === 'runtime' || n.kind === 'telegram')
+    .slice(0, 12)
+    .forEach((n, idx) => {
+      L.polyline([originPoint, [n.displayLat, n.displayLon]], {
+        color: idx % 2 === 0 ? 'rgba(245,178,51,0.65)' : 'rgba(255,138,61,0.55)',
+        weight: 1.6,
+        dashArray: '4 6',
+      }).addTo(worldLinkLayer);
+    });
+
+  const originKey = `${Number(localOrigin.latitude).toFixed(3)}|${Number(localOrigin.longitude).toFixed(3)}`;
+  if (!worldMapHasFitted || worldMapLastOriginKey !== originKey) {
+    const bounds = L.latLngBounds(nodes.map((n) => [n.displayLat, n.displayLon]));
+    if (bounds.isValid()) {
+      map.fitBounds(bounds.pad(0.22), { maxZoom: 5, animate: true });
+    } else {
+      map.setView(originPoint, 4);
+    }
+    worldMapHasFitted = true;
+    worldMapLastOriginKey = originKey;
+  }
+
+  statsEl.innerHTML = [
+    { label: t('worldMapNodes'), value: `${activeNodes}/${totalNodes}`, className: 'ok' },
+    { label: t('worldMapLastEvent'), value: lastEvent, className: 'info' },
+    { label: t('worldMapMode'), value: mode, className: 'warn' },
+    {
+      label: t('worldMapMapState'),
+      value: overall === 'ok' ? t('worldMapHealthy') : overall === 'warn' ? t('worldMapDegraded') : t('worldMapOffline'),
+      className: overall === 'ok' ? 'ok' : overall === 'warn' ? 'warn' : 'bad',
+    },
+  ].map((k) =>
+    `<div class="kpi"><div class="label">${k.label}</div><div class="value ${k.className}" style="font-size:14px">${esc(k.value)}</div></div>`
+  ).join('');
+
+  legendEl.innerHTML = `
+    <div class="world-legend-item"><span class="world-legend-dot" style="background:#f5b233"></span><span>${t('worldMapHealthy')}</span></div>
+    <div class="world-legend-item"><span class="world-legend-dot" style="background:#ff8a3d"></span><span>${t('worldMapDegraded')}</span></div>
+    <div class="world-legend-item"><span class="world-legend-dot" style="background:#ef4444"></span><span>${t('worldMapOffline')}</span></div>
+  `;
+
+  traceEl.innerHTML = networkEvents.length
+    ? networkEvents.map((ev) => `
+      <div class="trace-row">
+        <span class="trace-left">${esc(ev.type.toUpperCase())} · ${esc(ev.target)}</span>
+        <span class="trace-right">${esc(ev.ts || '--:--:--')}</span>
+      </div>
+    `).join('')
+    : `<div class="trace-row"><span class="trace-left">${t('traceNoEvents')}</span><span class="trace-right">-</span></div>`;
+}
+
 // ── charts ────────────────────────────────────────────────────────────────────
 const CHART_COLORS = [
-  'rgba(59,130,246,0.85)',
-  'rgba(167,139,250,0.85)',
-  'rgba(249,115,22,0.85)',
-  'rgba(34,197,94,0.85)',
-  'rgba(6,182,212,0.85)',
-  'rgba(245,158,11,0.85)',
-  'rgba(239,68,68,0.85)',
+  'rgba(245,178,51,0.9)',
+  'rgba(255,138,61,0.9)',
+  'rgba(255,107,53,0.9)',
+  'rgba(250,204,21,0.9)',
+  'rgba(249,115,22,0.9)',
+  'rgba(245,158,11,0.9)',
+  'rgba(239,68,68,0.88)',
 ];
 
 const chartOptions = (title) => ({
   responsive: true,
   maintainAspectRatio: false,
   plugins: {
-    legend: { labels: { color: '#94a3b8', font: { size: 11 } } },
-    title: title ? { display: true, text: title, color: '#94a3b8', font: { size: 12 } } : undefined,
-    tooltip: { backgroundColor: '#1a1d27', titleColor: '#e2e8f0', bodyColor: '#94a3b8' },
+    legend: { labels: { color: '#d1d5db', font: { size: 11 } } },
+    title: title ? { display: true, text: title, color: '#d1d5db', font: { size: 12 } } : undefined,
+    tooltip: { backgroundColor: '#0f172a', titleColor: '#f8fafc', bodyColor: '#e2e8f0' },
   },
   scales: {
-    x: { ticks: { color: '#94a3b8', font: { size: 11 } }, grid: { color: 'rgba(255,255,255,.05)' } },
-    y: { ticks: { color: '#94a3b8', font: { size: 11 } }, grid: { color: 'rgba(255,255,255,.05)' } },
+    x: { ticks: { color: '#cbd5e1', font: { size: 11 } }, grid: { color: 'rgba(245,178,51,.08)' } },
+    y: { ticks: { color: '#cbd5e1', font: { size: 11 } }, grid: { color: 'rgba(245,178,51,.08)' } },
   },
 });
 
@@ -1016,8 +1585,8 @@ function updateCharts(usageData) {
       options: {
         ...chartOptions(),
         scales: {
-          x: { stacked: true, ticks: { color: '#94a3b8', font: { size: 11 } }, grid: { color: 'rgba(255,255,255,.05)' } },
-          y: { stacked: true, ticks: { color: '#94a3b8', font: { size: 11 } }, grid: { color: 'rgba(255,255,255,.05)' } },
+          x: { stacked: true, ticks: { color: '#cbd5e1', font: { size: 11 } }, grid: { color: 'rgba(245,178,51,.08)' } },
+          y: { stacked: true, ticks: { color: '#cbd5e1', font: { size: 11 } }, grid: { color: 'rgba(245,178,51,.08)' } },
         },
       },
     });
@@ -1035,9 +1604,9 @@ function updateCharts(usageData) {
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
-          legend: { position: 'right', labels: { color: '#94a3b8', font: { size: 11 }, boxWidth: 12 } },
+          legend: { position: 'right', labels: { color: '#d1d5db', font: { size: 11 }, boxWidth: 12 } },
           tooltip: {
-            backgroundColor: '#1a1d27', titleColor: '#e2e8f0', bodyColor: '#94a3b8',
+            backgroundColor: '#0f172a', titleColor: '#f8fafc', bodyColor: '#e2e8f0',
             callbacks: {
               label: (ctx) => {
                 const val = ctx.parsed;
@@ -1146,8 +1715,8 @@ function renderResources(data) {
       {
         label: `${t('serviceOpenclaw')} ${t('metricCpu')}`,
         data: series.map((row) => n(row?.openclaw?.cpuPct)),
-        borderColor: 'rgba(25,181,254,0.95)',
-        backgroundColor: 'rgba(25,181,254,0.18)',
+        borderColor: 'rgba(245,178,51,0.95)',
+        backgroundColor: 'rgba(245,178,51,0.18)',
         yAxisID: 'y',
         tension: 0.28,
         fill: false,
@@ -1156,8 +1725,8 @@ function renderResources(data) {
       {
         label: `${t('serviceOpenclaw')} ${t('metricRam')}`,
         data: series.map((row) => n(row?.openclaw?.ramPct)),
-        borderColor: 'rgba(45,212,191,0.95)',
-        backgroundColor: 'rgba(45,212,191,0.12)',
+        borderColor: 'rgba(255,138,61,0.95)',
+        backgroundColor: 'rgba(255,138,61,0.14)',
         yAxisID: 'y',
         tension: 0.28,
         fill: false,
@@ -1167,8 +1736,8 @@ function renderResources(data) {
       {
         label: `${t('serviceHomeassistant')} ${t('metricCpu')}`,
         data: series.map((row) => n(row?.homeassistant?.cpuPct)),
-        borderColor: 'rgba(249,115,22,0.95)',
-        backgroundColor: 'rgba(249,115,22,0.15)',
+        borderColor: 'rgba(250,204,21,0.95)',
+        backgroundColor: 'rgba(250,204,21,0.15)',
         yAxisID: 'y',
         tension: 0.28,
         fill: false,
@@ -1177,8 +1746,8 @@ function renderResources(data) {
       {
         label: `${t('serviceHomeassistant')} ${t('metricRam')}`,
         data: series.map((row) => n(row?.homeassistant?.ramPct)),
-        borderColor: 'rgba(245,158,11,0.95)',
-        backgroundColor: 'rgba(245,158,11,0.15)',
+        borderColor: 'rgba(249,115,22,0.95)',
+        backgroundColor: 'rgba(249,115,22,0.16)',
         yAxisID: 'y',
         tension: 0.28,
         fill: false,
@@ -1188,8 +1757,8 @@ function renderResources(data) {
       {
         label: `${t('serviceN8n')} ${t('metricCpu')}`,
         data: series.map((row) => n(row?.n8n?.cpuPct)),
-        borderColor: 'rgba(167,139,250,0.95)',
-        backgroundColor: 'rgba(167,139,250,0.15)',
+        borderColor: 'rgba(255,107,53,0.95)',
+        backgroundColor: 'rgba(255,107,53,0.15)',
         yAxisID: 'y',
         tension: 0.28,
         fill: false,
@@ -1198,8 +1767,8 @@ function renderResources(data) {
       {
         label: `${t('serviceN8n')} ${t('metricRam')}`,
         data: series.map((row) => n(row?.n8n?.ramPct)),
-        borderColor: 'rgba(34,197,94,0.95)',
-        backgroundColor: 'rgba(34,197,94,0.15)',
+        borderColor: 'rgba(239,68,68,0.95)',
+        backgroundColor: 'rgba(239,68,68,0.14)',
         yAxisID: 'y',
         tension: 0.28,
         fill: false,
@@ -1223,19 +1792,19 @@ function renderResources(data) {
       maintainAspectRatio: false,
       animation: { duration: 550, easing: 'easeOutQuart' },
       plugins: {
-        legend: { labels: { color: '#94a3b8', font: { size: 11 } } },
+        legend: { labels: { color: '#d1d5db', font: { size: 11 } } },
       },
       scales: {
         x: {
-          ticks: { color: '#94a3b8', font: { size: 10 }, maxTicksLimit: 12 },
-          grid: { color: 'rgba(255,255,255,.05)' },
+          ticks: { color: '#cbd5e1', font: { size: 10 }, maxTicksLimit: 12 },
+          grid: { color: 'rgba(245,178,51,.08)' },
         },
         y: {
           position: 'left',
           suggestedMin: 0,
           suggestedMax: 100,
-          ticks: { color: '#94a3b8', callback: (v) => `${v}%` },
-          grid: { color: 'rgba(255,255,255,.05)' },
+          ticks: { color: '#cbd5e1', callback: (v) => `${v}%` },
+          grid: { color: 'rgba(245,178,51,.08)' },
         },
       },
     },
@@ -1314,7 +1883,7 @@ function renderModel(data) {
       try {
         const out = await setModelMode(targetMode);
         if (msg) msg.textContent = out?.message || t('modeApplied', { mode: targetMode });
-        await load();
+        await load({ force: true, showLoading: false });
       } catch (e) {
         if (msg) msg.textContent = `Error: ${String(e.message || e)}`;
       } finally {
@@ -1549,7 +2118,7 @@ function renderServiceControls(data) {
       try {
         const out = await callServiceAction(service, action);
         if (msg) msg.textContent = out.message || 'OK';
-        await load();
+        await load({ force: true, showLoading: false });
       } catch (e) {
         if (msg) msg.textContent = `Error: ${String(e.message || e)}`;
       } finally {
@@ -2073,7 +2642,7 @@ function renderVacuum(data) {
         }
         const out = await callVacuumAction(payload);
         if (statusEl) statusEl.textContent = out?.message || t('vacuumActionSent', { action });
-        await load();
+        await load({ force: true, showLoading: false });
       } catch (err) {
         if (statusEl) statusEl.textContent = t('vacuumActionError', { error: String(err?.message || err) });
       }
@@ -2127,18 +2696,25 @@ document.querySelectorAll('.tab').forEach((tab) => {
 
 // ── main load ─────────────────────────────────────────────────────────────────
 /** Alias público para el botón Actualizar del header */
-function refreshStatus() { load(); }
+function refreshStatus() { load({ force: true, showLoading: false }); }
 
 /** Muestra skeletons en los contenedores clave antes de que lleguen los datos */
 function showSkeletons() {
   const sk = (id, h = 80) => {
     const el = document.getElementById(id);
-    if (el && !el.dataset.loaded) el.innerHTML = `<div class="skeleton" style="height:${h}px;border-radius:10px"></div>`;
+    if (!el) return;
+    const alreadyLoaded = el.dataset.loaded === '1';
+    const hasContent = String(el.innerHTML || '').trim().length > 0;
+    if (!alreadyLoaded && !hasContent) {
+      el.innerHTML = `<div class="skeleton" style="height:${h}px;border-radius:10px"></div>`;
+    }
   };
   sk('summary', 80);
   sk('connections', 100);
   sk('modelInfo', 120);
   sk('resourceSummary', 60);
+  sk('worldMapStats', 60);
+  sk('worldMapTrace', 44);
   sk('serviceControls', 80);
   sk('lastActivity', 60);
   sk('soulState', 40);
@@ -2160,50 +2736,96 @@ function updateHeaderStatus(data) {
   }
 }
 
-/**
- * Carga lazy: muestra skeletons inmediatamente, luego carga datos de /api/status
- * y renderiza cada sección en cuanto llega la respuesta (no espera a todas).
- * Las secciones pesadas (charts, usage, security) renderizan en microtask siguiente.
- */
-async function load() {
-  showSkeletons();
+function statusSignature(data) {
+  const latestTs = n(data?.activity?.latest?.timestampMs);
+  const errors = n(data?.activity?.recentErrorsCount) + n(data?.openclaw?.errorCountRecent);
+  const model = String(data?.openclaw?.modelPrimary || '');
+  const listening = Boolean(data?.openclaw?.listening);
+  const usageTotal = n(data?.usage?.totals?.total);
+  const series = Array.isArray(data?.resources?.series24h) ? data.resources.series24h : [];
+  const lastSeriesTs = n(series.length ? series[series.length - 1]?.ts : 0);
+  return [latestTs, errors, model, listening ? 1 : 0, usageTotal, lastSeriesTs].join('|');
+}
+
+function renderStatusData(data) {
+  renderSummary(data);
+  updateHeaderStatus(data);
+  renderConnections(data);
+  renderModel(data);
+
+  requestAnimationFrame(() => {
+    renderWorldMap(data);
+    renderResources(data);
+    renderServiceControls(data);
+    renderLastActivity(data);
+    renderSoul(data);
+    renderJobs(data);
+  });
+
+  setTimeout(() => {
+    renderUsage(data);
+    renderOpenRouter(data);
+    renderSecurity(data);
+    updateCharts(buildFilteredUsage(data));
+    renderProjects(data);
+    renderVacuum(data);
+    renderApple(data);
+    renderTelegram(data.activity?.telegramEvents || []);
+    renderLogContainer('openclawLogs', data.logs?.openclaw || []);
+    renderLogContainer('haLogs', data.logs?.homeassistant || []);
+    renderLastActivity(data);
+  }, 0);
+
+  [
+    'summary',
+    'connections',
+    'modelInfo',
+    'resourceSummary',
+    'worldMapStats',
+    'worldMapTrace',
+    'serviceControls',
+    'lastActivity',
+    'soulState',
+    'usageSummary',
+  ].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.dataset.loaded = '1';
+  });
+}
+
+async function load(options = {}) {
+  const force = options.force === true;
+  const showLoading = options.showLoading !== false;
+  const now = Date.now();
+
+  if (!force && statusCache.data && (now - statusCache.fetchedAt) < STATUS_CACHE_TTL_MS) {
+    renderStatusData(statusCache.data);
+    setText('lastUpdate', `${t('lastUpdate')}: ${new Date(statusCache.fetchedAt).toLocaleString(getLocale())} · cache`);
+    return;
+  }
+
+  if (showLoading && (!statusCache.data || force)) showSkeletons();
+
   try {
-    const res = await apiFetch('/api/status', { cache: 'no-store' });
+    const statusPath = force ? '/api/status?force=1' : '/api/status';
+    const res = await apiFetch(statusPath, { cache: 'no-store' });
     const data = await res.json();
-
-    // ── Sección crítica: renderiza primero (visible above-the-fold)
-    renderSummary(data);
-    updateHeaderStatus(data);
-    renderConnections(data);
-    renderModel(data);
-
-    // ── Sección media: renderiza en siguiente frame
-    requestAnimationFrame(() => {
-      renderResources(data);
-      renderServiceControls(data);
-      renderLastActivity(data);
-      renderSoul(data);
-      renderJobs(data);
-    });
-
-    // ── Sección pesada: charts + usage + security en microtask posterior
-    setTimeout(() => {
-      renderUsage(data);
-      renderOpenRouter(data);
-      renderSecurity(data);
-      updateCharts(buildFilteredUsage(data));
-      renderProjects(data);
-      renderVacuum(data);
-      renderApple(data);
-      renderTelegram(data.activity?.telegramEvents || []);
-      renderLogContainer('openclawLogs', data.logs?.openclaw || []);
-      renderLogContainer('haLogs', data.logs?.homeassistant || []);
-      renderLastActivity(data);
-    }, 0);
-
-    setText('lastUpdate', `${t('lastUpdate')}: ${new Date().toLocaleString(getLocale())}`);
+    const sig = statusSignature(data);
+    const unchanged = !force && statusCache.signature && statusCache.signature === sig;
+    if (unchanged && statusCache.data) {
+      statusCache.fetchedAt = now;
+      setText('lastUpdate', `${t('lastUpdate')}: ${new Date(now).toLocaleString(getLocale())} · sin cambios`);
+      return;
+    }
+    statusCache = { data, fetchedAt: now, signature: sig };
+    renderStatusData(data);
+    setText('lastUpdate', `${t('lastUpdate')}: ${new Date(now).toLocaleString(getLocale())}`);
   } catch (e) {
-    // Mostrar error en los skeleton placeholders
+    if (statusCache.data) {
+      renderStatusData(statusCache.data);
+      setText('lastUpdate', `${t('lastUpdate')}: ${new Date(statusCache.fetchedAt).toLocaleString(getLocale())} · cache/error`);
+      return;
+    }
     ['summary','connections','modelInfo'].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.innerHTML = `<span style="color:var(--color-destructive);font-size:12px">Error cargando: ${e.message}</span>`;
@@ -2272,7 +2894,7 @@ async function resetUsageCounters() {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data?.ok) throw new Error(data?.message || 'No se pudo resetear métricas');
-    await load();
+    await load({ force: true, showLoading: false });
     const snap = data?.openrouterSnapshot?.ok
       ? t('snapshotCredit', { credit: fmtMoney(data.openrouterSnapshot.remainingUsd, 'USD') })
       : '';
@@ -2287,30 +2909,69 @@ async function resetUsageCounters() {
   }
 }
 
-document.getElementById('refreshBtn').addEventListener('click', load);
+document.getElementById('refreshBtn').addEventListener('click', () => load({ force: true, showLoading: false }));
 document.getElementById('resetUsageBtn')?.addEventListener('click', resetUsageCounters);
 document.getElementById('refreshUpdateBtn')?.addEventListener('click', refreshUpdateStatus);
 document.getElementById('copyGatewayAuthBtn')?.addEventListener('click', copyGatewayAuth);
 document.getElementById('appleNotifySend')?.addEventListener('click', sendAppleNotify);
+document.getElementById('worldMapLocateBtn')?.addEventListener('click', () => {
+  requestWorldUserLocation();
+  registerUserActivity();
+});
+document.getElementById('toolbarToggleBtn')?.addEventListener('click', () => {
+  toolbarAdvancedCollapsed = !toolbarAdvancedCollapsed;
+  localStorage.setItem(TOOLBAR_ADVANCED_COLLAPSED_KEY, toolbarAdvancedCollapsed ? '1' : '0');
+  updateToolbarAdvancedUi();
+  registerUserActivity();
+});
+document.getElementById('autoRefreshToggle')?.addEventListener('change', (e) => {
+  autoRefreshEnabled = Boolean(e.target?.checked);
+  localStorage.setItem(AUTO_REFRESH_ENABLED_KEY, autoRefreshEnabled ? '1' : '0');
+  renderAutoRefreshStatus();
+  scheduleGlobalRefreshTimers();
+  registerUserActivity();
+});
+document.getElementById('autoRefreshInterval')?.addEventListener('change', (e) => {
+  autoRefreshIntervalMs = normalizeAutoRefreshInterval(e.target?.value);
+  localStorage.setItem(AUTO_REFRESH_INTERVAL_KEY, String(autoRefreshIntervalMs));
+  renderAutoRefreshStatus();
+  scheduleGlobalRefreshTimers();
+  registerUserActivity();
+});
 document.getElementById('langSelect')?.addEventListener('change', async (e) => {
   const next = String(e.target?.value || 'es');
   if (!SUPPORTED_LANGS.includes(next)) return;
   currentLang = next;
   localStorage.setItem(LANG_STORAGE_KEY, next);
   applyI18nToDom();
-  await load();
+  await load({ showLoading: true });
   await refreshUpdateStatus();
+  registerUserActivity();
 });
 
 const savedLang = localStorage.getItem(LANG_STORAGE_KEY);
 if (savedLang && SUPPORTED_LANGS.includes(savedLang)) currentLang = savedLang;
+const savedToolbar = localStorage.getItem(TOOLBAR_ADVANCED_COLLAPSED_KEY);
+if (savedToolbar === '0') toolbarAdvancedCollapsed = false;
+const savedAutoEnabled = localStorage.getItem(AUTO_REFRESH_ENABLED_KEY);
+if (savedAutoEnabled === '0') autoRefreshEnabled = false;
+const savedAutoIntervalMs = localStorage.getItem(AUTO_REFRESH_INTERVAL_KEY);
+if (savedAutoIntervalMs) autoRefreshIntervalMs = normalizeAutoRefreshInterval(savedAutoIntervalMs);
 const langSelect = document.getElementById('langSelect');
 if (langSelect) langSelect.value = currentLang;
 applyI18nToDom();
-load();
+updateToolbarAdvancedUi();
+load({ showLoading: true });
 refreshUpdateStatus();
-setInterval(load, 30000);
-setInterval(refreshUpdateStatus, 60000);
+renderAutoRefreshStatus();
+scheduleGlobalRefreshTimers();
+
+['click', 'keydown', 'scroll', 'touchstart', 'mousemove'].forEach((evt) => {
+  window.addEventListener(evt, registerUserActivity, { passive: true });
+});
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) registerUserActivity();
+});
 
 // ── Autonomous Agent ─────────────────────────────────────────────────────────
 let _autoSessionId = null;
@@ -2340,7 +3001,7 @@ function updateAutoStatusBadge(status) {
 async function autoStart() {
   const goal = (document.getElementById('auto-goal')?.value || '').trim();
   if (!goal) { showToast('Ingresa un objetivo para el agente', 'error'); return; }
-  const model = document.getElementById('auto-model-select')?.value || 'openrouter/minimax/minimax-m2.5';
+  const model = document.getElementById('auto-model-select')?.value || 'openrouter/minimax/minimax-m2.7';
   const maxIterations = Number(document.getElementById('auto-iterations')?.value || 15);
   const riskLevel = document.getElementById('auto-risk-level')?.value || 'MEDIUM';
   try {
@@ -2537,6 +3198,749 @@ async function loadSessionSteps(sessionId) {
 
 // Poll status while section is active
 setInterval(() => {
+  if (isUserEditing()) return;
   const section = document.getElementById('section-autonomous');
   if (section?.classList.contains('active') && _autoSessionId) fetchAutoStatus();
-}, 5000);
+}, 15000);
+
+// ── Local Models (Ollama + hardware compatibility) ────────────────────────────
+
+function escHtmlModels(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+async function fetchLocalModels() {
+  const tbody = document.getElementById('models-tbody');
+  if (tbody) tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:24px"><div class="skeleton skeleton-text" style="margin:auto;width:200px"></div></td></tr>';
+  try {
+    const res = await apiFetch('/api/models/local', { cache: 'no-store' });
+    const data = await res.json();
+
+    // KPIs
+    const setKpi = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    setKpi('models-ollama-status', data.ollamaRunning ? '✓ Activo' : '✕ Detenido');
+    const ollamaEl = document.getElementById('models-ollama-status');
+    if (ollamaEl) ollamaEl.style.color = data.ollamaRunning ? 'var(--color-success)' : 'var(--color-destructive)';
+    const cpuShort = (data.hardware?.cpuBrand || '—').replace('Apple ', '').replace(' Chip', '');
+    setKpi('models-cpu', cpuShort || '—');
+    setKpi('models-ram', data.hardware?.totalRamGb ? `${data.hardware.totalRamGb} GB` : '—');
+    setKpi('models-disk', data.ollamaDiskUsed || '—');
+    setKpi('models-count', String(data.models?.length ?? '—'));
+    setKpi('models-running-count', String(data.runningModels?.length ?? 0));
+
+    // Models table
+    if (!data.models?.length) {
+      if (tbody) tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--color-text-muted);padding:24px">Sin modelos instalados en Ollama</td></tr>';
+    } else {
+      if (tbody) tbody.innerHTML = data.models.map(m => {
+        let compatBadge = '<span class="compat-badge compat-unknown">?</span>';
+        if (m.canRun === true && !m.warning) compatBadge = '<span class="compat-badge compat-ok">✓ Corre bien</span>';
+        else if (m.canRun === true && m.warning) compatBadge = `<span class="compat-badge compat-warn" title="${escHtmlModels(m.warning)}">⚠ Ajustado</span>`;
+        else if (m.canRun === false) compatBadge = `<span class="compat-badge compat-no" title="${escHtmlModels(m.warning)}">✕ Sin RAM</span>`;
+        const loadedBadge = m.isLoaded ? '<span class="compat-badge compat-loaded">▶ En memoria</span>' : '';
+        return `<tr${m.isLoaded ? ' class="row-loaded"' : ''}>
+          <td style="font-weight:500">${escHtmlModels(m.name)}</td>
+          <td style="color:var(--color-text-muted)">${escHtmlModels(m.family || '—')}</td>
+          <td>${escHtmlModels(m.parameterSize || '—')}</td>
+          <td><code style="font-size:11px">${escHtmlModels(m.quantization || '—')}</code></td>
+          <td>${m.sizeGb ? `${m.sizeGb} GB` : '—'}</td>
+          <td>${m.ramRequiredGb ? `~${m.ramRequiredGb} GB` : '—'}</td>
+          <td>${compatBadge}</td>
+          <td>${loadedBadge || '<span style="color:var(--color-text-muted)">—</span>'}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    // Currently loaded
+    const loadedList = document.getElementById('models-loaded-list');
+    if (loadedList) {
+      if (!data.runningModels?.length) {
+        loadedList.textContent = 'Sin modelos activos en memoria';
+      } else {
+        loadedList.innerHTML = data.runningModels.map(m => `
+          <div style="display:flex;gap:12px;padding:8px 0;border-bottom:1px solid var(--color-border)">
+            <span style="font-weight:500">${escHtmlModels(m.name)}</span>
+            <span style="color:var(--color-text-muted)">VRAM: ${m.sizeVram} GB</span>
+            ${m.expiresAt ? `<span style="color:var(--color-text-muted)">Expira: ${new Date(m.expiresAt).toLocaleTimeString('es-CL')}</span>` : ''}
+          </div>
+        `).join('');
+      }
+    }
+
+    // Recommendations (canirun.ai style)
+    renderModelRecommendations(data);
+
+    initLucide();
+  } catch (e) {
+    if (tbody) tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--color-destructive);padding:24px">Error consultando Ollama</td></tr>';
+  }
+}
+
+function renderModelRecommendations(data) {
+  const el = document.getElementById('models-recommendations');
+  if (!el) return;
+  const ram = data.hardware?.totalRamGb || 0;
+  const cpu = data.hardware?.cpuBrand || '';
+  const isAppleSilicon = cpu.includes('Apple') || cpu.includes('M1') || cpu.includes('M2') || cpu.includes('M3') || cpu.includes('M4');
+
+  const tiers = [
+    { label: '7B–8B Q4', req: 6,  note: 'Velocidad excelente en Apple Silicon. Ideal para uso diario.' },
+    { label: '13B Q4',   req: 10, note: 'Alta calidad, buena velocidad en M-series con 16 GB+.' },
+    { label: '32B Q4',   req: 22, note: 'Calidad muy alta. Necesita 24 GB+.' },
+    { label: '70B Q4',   req: 45, note: 'Calidad premium. Necesita 48 GB+.' },
+  ];
+
+  const rows = tiers.map(t => {
+    const canRun = ram >= t.req + 2;
+    const tight = !canRun && ram >= t.req;
+    const icon = canRun ? '✓' : tight ? '⚠' : '✕';
+    const cls = canRun ? 'compat-ok' : tight ? 'compat-warn' : 'compat-no';
+    return `<div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--color-border);align-items:flex-start">
+      <span class="compat-badge ${cls}" style="min-width:22px;text-align:center">${icon}</span>
+      <div>
+        <span style="font-weight:500">${t.label}</span>
+        <span style="color:var(--color-text-muted);margin-left:8px;font-size:12px">req. ~${t.req} GB</span>
+        <div style="font-size:12px;color:var(--color-text-muted);margin-top:2px">${t.note}</div>
+      </div>
+    </div>`;
+  });
+
+  const appleNote = isAppleSilicon
+    ? `<div style="background:var(--color-bg-elevated);border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:12px">
+        <strong>Apple Silicon (${cpu})</strong> — La memoria unificada actúa como VRAM.
+        Con ${ram} GB puedes correr modelos de hasta ~${Math.floor((ram - 2) / 0.55 / 1000)}B parámetros en Q4.
+      </div>`
+    : '';
+
+  el.innerHTML = appleNote + rows.join('');
+}
+
+// Refresh models section every 5min when active
+setInterval(() => {
+  if (isUserEditing()) return;
+  const section = document.getElementById('section-models');
+  if (section?.classList.contains('active')) fetchLocalModels();
+}, SECTION_AUTO_REFRESH_MS);
+
+// ── Programmer Mode (OpenCode) ────────────────────────────────────────────────
+
+async function fetchOpenCodeStatus() {
+  try {
+    const res = await apiFetch('/api/opencode/status', { cache: 'no-store' });
+    const data = await res.json();
+
+    const setEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    setEl('oc-status', data.running ? '✓ Corriendo' : '○ Detenido');
+    const statusEl = document.getElementById('oc-status');
+    if (statusEl) statusEl.style.color = data.running ? 'var(--color-success)' : 'var(--color-text-muted)';
+    setEl('oc-version', data.version || '—');
+    setEl('oc-port', String(data.port || '—'));
+    setEl('oc-sessions-count', String(data.sessions?.length ?? 0));
+
+    // Open link
+    const openLink = document.getElementById('oc-open-link');
+    if (openLink) {
+      openLink.href = data.url || '#';
+      openLink.style.display = data.running ? '' : 'none';
+    }
+
+    // Project selector
+    const select = document.getElementById('oc-project-select');
+    if (select && data.projects?.length) {
+      const current = select.value;
+      select.innerHTML = '<option value="">Selecciona proyecto...</option>' +
+        data.projects.map(p => `<option value="${escHtmlModels(p.path)}"${p.path === current ? ' selected' : ''}>${escHtmlModels(p.label)}</option>`).join('');
+    }
+
+    // Sessions list
+    renderOcSessions(data.sessions || []);
+
+    initLucide();
+  } catch (e) {
+    document.getElementById('oc-status') && (document.getElementById('oc-status').textContent = 'Error');
+  }
+}
+
+function renderOcSessions(sessions) {
+  const el = document.getElementById('oc-sessions-list');
+  if (!el) return;
+  if (!sessions.length) {
+    el.textContent = 'Sin sesiones recientes';
+    return;
+  }
+  el.innerHTML = sessions.map(s => {
+    const id = escHtmlModels(s.id || s.sessionId || '');
+    const title = escHtmlModels(s.title || s.name || id.slice(0, 20) || '—');
+    const model = escHtmlModels(s.model || '');
+    const created = s.createdAt || s.created_at ? new Date(s.createdAt || s.created_at).toLocaleString('es-CL') : '';
+    return `<div style="padding:8px 0;border-bottom:1px solid var(--color-border);display:flex;gap:12px;align-items:center">
+      <code style="font-size:10px;color:var(--color-text-muted)">${id.slice(0, 8)}</code>
+      <span style="font-weight:500;flex:1">${title}</span>
+      ${model ? `<span style="font-size:11px;color:var(--color-text-muted)">${model}</span>` : ''}
+      ${created ? `<span style="font-size:11px;color:var(--color-text-muted)">${created}</span>` : ''}
+    </div>`;
+  }).join('');
+}
+
+async function startOpenCode() {
+  const select = document.getElementById('oc-project-select');
+  const projectPath = select?.value || '';
+  if (!projectPath) { showToast('Selecciona un proyecto primero', 'warn'); return; }
+  const msgEl = document.getElementById('oc-action-msg');
+  if (msgEl) msgEl.textContent = 'Iniciando OpenCode...';
+  try {
+    const res = await apiFetch('/api/opencode/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectPath }),
+    });
+    const data = await res.json();
+    if (msgEl) msgEl.textContent = data.message || (data.ok ? 'OK' : 'Error');
+    showToast(data.message || 'Hecho', data.ok ? 'success' : 'error');
+    if (data.ok) {
+      setTimeout(fetchOpenCodeStatus, 1000);
+      const openLink = document.getElementById('oc-open-link');
+      if (openLink && data.url) { openLink.href = data.url; openLink.style.display = ''; }
+    }
+  } catch { showToast('Error iniciando OpenCode', 'error'); }
+}
+
+async function stopOpenCode() {
+  const msgEl = document.getElementById('oc-action-msg');
+  if (msgEl) msgEl.textContent = 'Deteniendo OpenCode...';
+  try {
+    const res = await apiFetch('/api/opencode/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const data = await res.json();
+    if (msgEl) msgEl.textContent = data.message || 'Detenido';
+    showToast('OpenCode detenido', 'info');
+    setTimeout(fetchOpenCodeStatus, 800);
+  } catch { showToast('Error deteniendo OpenCode', 'error'); }
+}
+
+async function fetchOpenCodeLogs() {
+  const pre = document.getElementById('oc-logs');
+  if (!pre) return;
+  try {
+    const res = await apiFetch('/api/opencode/logs', { cache: 'no-store' });
+    const data = await res.json();
+    pre.textContent = data.lines?.join('\n') || '(sin logs)';
+    pre.scrollTop = pre.scrollHeight;
+  } catch { pre && (pre.textContent = 'Error cargando logs'); }
+}
+
+// Refresh programmer section every 15s when active
+setInterval(() => {
+  if (isUserEditing()) return;
+  const section = document.getElementById('section-programmer');
+  if (section?.classList.contains('active')) fetchOpenCodeStatus();
+}, 30000);
+
+// ── Multi-Agent ───────────────────────────────────────────────────────────────
+
+let _maAgents = [];
+
+async function fetchMultiAgent() {
+  try {
+    const [agentsRes, cfgRes] = await Promise.all([
+      apiFetch('/api/multiagent/agents', { cache: 'no-store' }),
+      apiFetch('/api/multiagent/config', { cache: 'no-store' }),
+    ]);
+    const agentsData = await agentsRes.json();
+    const cfgData = await cfgRes.json();
+
+    _maAgents = agentsData.agents || [];
+
+    // KPIs
+    const setEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    setEl('ma-agents-count', String(_maAgents.length));
+    const a2aEl = document.getElementById('ma-a2a-status');
+    if (a2aEl) { a2aEl.textContent = cfgData.agentToAgentEnabled ? '✓ ON' : '✕ OFF'; a2aEl.style.color = cfgData.agentToAgentEnabled ? 'var(--color-success)' : 'var(--color-text-muted)'; }
+    setEl('ma-spawn-depth', String(cfgData.maxSpawnDepth ?? 1));
+    const acpEl = document.getElementById('ma-acp-status');
+    if (acpEl) { acpEl.textContent = cfgData.acpEnabled ? '✓ ON' : '✕ OFF'; acpEl.style.color = cfgData.acpEnabled ? 'var(--color-success)' : 'var(--color-text-muted)'; }
+
+    // Config toggles
+    const a2aToggle = document.getElementById('ma-a2a-toggle');
+    if (a2aToggle) a2aToggle.checked = cfgData.agentToAgentEnabled;
+    const depthInput = document.getElementById('ma-depth-input');
+    if (depthInput) depthInput.value = cfgData.maxSpawnDepth ?? 1;
+
+    // Agents list
+    renderMaAgents(_maAgents, agentsData.bindings || []);
+
+    // Populate agent selectors
+    const spawnSel = document.getElementById('ma-spawn-agent');
+    const filterSel = document.getElementById('ma-sessions-filter');
+    if (spawnSel) {
+      const current = spawnSel.value;
+      spawnSel.innerHTML = _maAgents.map(a => `<option value="${a.id}"${a.id === current ? ' selected' : ''}>${a.identityEmoji || ''} ${a.id}${a.isDefault ? ' (default)' : ''}</option>`).join('');
+    }
+    if (filterSel) {
+      const current = filterSel.value;
+      filterSel.innerHTML = '<option value="">Todos los agentes</option>' +
+        _maAgents.map(a => `<option value="${a.id}"${a.id === current ? ' selected' : ''}>${a.id}</option>`).join('');
+    }
+
+    initLucide();
+  } catch (e) {
+    console.error('fetchMultiAgent error', e);
+  }
+}
+
+function renderMaAgents(agents, bindings) {
+  const el = document.getElementById('ma-agents-list');
+  if (!el) return;
+  if (!agents.length) { el.textContent = 'Sin agentes configurados'; return; }
+  el.innerHTML = agents.map(a => {
+    const routeList = (a.routes || []).join(', ') || '—';
+    return `<div style="display:flex;gap:12px;padding:10px;background:var(--color-bg-elevated,var(--color-bg));border-radius:6px;margin-bottom:8px;align-items:flex-start">
+      <div style="font-size:20px;line-height:1;padding-top:2px">${a.identityEmoji || '🤖'}</div>
+      <div style="flex:1">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">
+          <span style="font-weight:600;font-size:14px">${escHtmlModels(a.id)}</span>
+          ${a.isDefault ? '<span class="compat-badge compat-ok" style="font-size:10px">default</span>' : ''}
+          ${a.identityName ? `<span style="color:var(--color-text-muted);font-size:12px">${escHtmlModels(a.identityName)}</span>` : ''}
+        </div>
+        <div style="font-size:12px;color:var(--color-text-muted);display:flex;flex-wrap:wrap;gap:12px">
+          ${a.model ? `<span>Modelo: <code>${escHtmlModels(a.model.split('/').pop())}</code></span>` : ''}
+          <span>Bindings: ${a.bindings ?? 0}</span>
+          <span style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtmlModels(routeList)}">Rutas: ${escHtmlModels(routeList)}</span>
+        </div>
+        ${a.workspace ? `<div style="font-size:11px;color:var(--color-text-subtle);margin-top:3px">${escHtmlModels(a.workspace)}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function fetchMultiAgentSessions() {
+  const tbody = document.getElementById('ma-sessions-tbody');
+  const countEl = document.getElementById('ma-sessions-count');
+  if (tbody) tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:16px"><div class="skeleton skeleton-text" style="margin:auto;width:140px"></div></td></tr>';
+  const filterSel = document.getElementById('ma-sessions-filter');
+  const agentId = filterSel?.value || '';
+  try {
+    const res = await apiFetch(`/api/multiagent/sessions?limit=30${agentId ? `&agentId=${encodeURIComponent(agentId)}` : ''}`, { cache: 'no-store' });
+    const data = await res.json();
+    const sessions = data.sessions || [];
+    if (countEl) countEl.textContent = String(sessions.length);
+    if (!sessions.length) {
+      if (tbody) tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--color-text-muted);padding:20px">Sin sesiones registradas</td></tr>';
+      return;
+    }
+    if (tbody) tbody.innerHTML = sessions.map(s => {
+      const updated = s.updatedAt ? new Date(s.updatedAt).toLocaleString('es-CL') : '—';
+      const model = s.model ? s.model.split('/').pop() : '—';
+      const shortId = (s.sessionId || '').slice(0, 22);
+      return `<tr>
+        <td><code style="font-size:11px">${escHtmlModels(s.agentId)}</code></td>
+        <td style="font-size:11px;color:var(--color-text-muted);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtmlModels(s.sessionId)}">${escHtmlModels(shortId)}…</td>
+        <td style="text-align:center">${s.turns}</td>
+        <td style="font-size:11px;color:var(--color-text-muted)">${escHtmlModels(model)}</td>
+        <td style="font-size:11px;color:var(--color-text-muted)">${updated}</td>
+      </tr>`;
+    }).join('');
+  } catch {
+    if (tbody) tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--color-destructive);padding:16px">Error cargando sesiones</td></tr>';
+  }
+}
+
+async function spawnSubAgent() {
+  const task = document.getElementById('ma-spawn-task')?.value?.trim();
+  const agentId = document.getElementById('ma-spawn-agent')?.value || 'main';
+  const model = document.getElementById('ma-spawn-model')?.value || '';
+  const thinking = document.getElementById('ma-spawn-thinking')?.value || 'low';
+  if (!task) { showToast('Escribe una tarea para el sub-agente', 'warn'); return; }
+  const resultEl = document.getElementById('ma-spawn-result');
+  if (resultEl) resultEl.textContent = 'Lanzando sub-agente...';
+  try {
+    const res = await apiFetch('/api/multiagent/spawn', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task, agentId, model, thinking }),
+    });
+    const data = await res.json();
+    if (resultEl) resultEl.textContent = `✓ Lanzado: session=${data.sessionId} · agente=${data.agentId}`;
+    showToast(`Sub-agente lanzado (${data.sessionId?.slice(0, 16)})`, 'success');
+    document.getElementById('ma-spawn-task') && (document.getElementById('ma-spawn-task').value = '');
+    setTimeout(fetchMultiAgentSessions, 2000);
+  } catch { showToast('Error lanzando sub-agente', 'error'); }
+}
+
+async function setMultiAgentConfig(key, value) {
+  try {
+    const res = await apiFetch('/api/multiagent/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [key]: value }),
+    });
+    const data = await res.json();
+    showToast(data.ok ? `Config actualizada: ${key}` : 'Error actualizando config', data.ok ? 'success' : 'error');
+    if (data.ok) setTimeout(fetchMultiAgent, 500);
+  } catch { showToast('Error actualizando config', 'error'); }
+}
+
+// Refresh multi-agent section every 20s when active
+setInterval(() => {
+  if (isUserEditing()) return;
+  const section = document.getElementById('section-multiagent');
+  if (section?.classList.contains('active')) fetchMultiAgentSessions();
+}, 45000);
+
+// ── Model capabilities + Skills matching ─────────────────────────────────────
+
+// Color map for capability tags
+const CAP_COLORS = {
+  multimodal: '#7c3aed', vision: '#7c3aed',
+  code: '#0ea5e9', 'code-generation': '#0ea5e9',
+  reasoning: '#f59e0b', math: '#f59e0b',
+  'long-context': '#10b981', 'long context': '#10b981',
+  chat: '#6b7280', text: '#6b7280',
+  tools: '#ec4899', 'function calling': '#ec4899',
+  multilingual: '#14b8a6',
+  cloud: '#64748b', local: '#22c55e',
+  fast: '#f97316', speed: '#f97316',
+};
+
+function capBadge(cap) {
+  const color = CAP_COLORS[cap] || '#6b7280';
+  const labels = {
+    multimodal: 'Multimodal', vision: 'Visión', code: 'Código',
+    reasoning: 'Razonamiento', math: 'Matemáticas', 'long-context': 'Ctx largo',
+    chat: 'Chat', text: 'Texto', tools: 'Herramientas', multilingual: 'Multilingüe',
+    cloud: 'Cloud', local: 'Local', fast: 'Rápido',
+  };
+  return `<span class="cap-tag" style="background:${color}22;color:${color};border:1px solid ${color}44">${labels[cap] || cap}</span>`;
+}
+
+let _capsData = null;
+let _activeModelFilter = null;
+
+async function fetchModelCapabilities() {
+  const grid = document.getElementById('models-caps-grid');
+  const skillsGrid = document.getElementById('models-skills-grid');
+  try {
+    const res = await apiFetch('/api/models/capabilities', { cache: 'no-store' });
+    _capsData = await res.json();
+    if (!_capsData.ok) return;
+
+    renderCapabilityCards(_capsData.models);
+    buildModelFilterButtons(_capsData.models);
+    renderSkillsGrid(_capsData.skills, _capsData.models, _activeModelFilter);
+    initLucide();
+  } catch (e) {
+    if (grid) grid.innerHTML = '<div style="color:var(--color-destructive);font-size:13px">Error cargando capacidades</div>';
+  }
+}
+
+function renderCapabilityCards(models) {
+  const grid = document.getElementById('models-caps-grid');
+  if (!grid || !models?.length) return;
+
+  grid.innerHTML = models.map(m => {
+    const isCloud = m.isCloud;
+    const strengthList = (m.strengths || []).map(s => `<li>${escHtmlModels(s)}</li>`).join('');
+    const capBadges = (m.caps || []).map(c => capBadge(c)).join('');
+    const cloudBadge = isCloud
+      ? '<span class="cap-tag" style="background:#64748b22;color:#94a3b8;border:1px solid #64748b44">☁ Cloud</span>'
+      : '<span class="cap-tag" style="background:#22c55e22;color:#4ade80;border:1px solid #22c55e44">⬛ Local</span>';
+    const size = m.sizeGb > 0 ? `${m.sizeGb} GB` : isCloud ? 'Cloud' : '—';
+    const skillCount = m.matchedSkills?.length || 0;
+
+    return `<div class="cap-card" data-model="${escHtmlModels(m.name)}" onclick="filterSkillsByModel('${escHtmlModels(m.name)}')">
+      <div class="cap-card-header">
+        <div class="cap-card-badge">${escHtmlModels(m.badge)}</div>
+        <div class="cap-card-meta">${cloudBadge} <span style="font-size:11px;color:var(--color-text-muted)">${size}</span></div>
+      </div>
+      <div class="cap-card-name">${escHtmlModels(m.name.split(':')[0])}<span style="color:var(--color-text-subtle);font-size:10px">:${escHtmlModels(m.name.split(':')[1] || 'latest')}</span></div>
+      <div class="cap-card-desc">${escHtmlModels(m.description)}</div>
+      <div class="cap-tags">${capBadges}</div>
+      ${m.strengths?.length ? `<ul class="cap-strengths">${strengthList}</ul>` : ''}
+      <div class="cap-card-footer">
+        <span style="font-size:11px;color:var(--color-text-muted)">${skillCount} skill${skillCount !== 1 ? 's' : ''} compatibles</span>
+        <span style="font-size:11px;color:var(--color-accent)">Click para filtrar →</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function buildModelFilterButtons(models) {
+  const filterEl = document.getElementById('skills-model-filter');
+  if (!filterEl) return;
+  filterEl.innerHTML = models.map(m => {
+    const shortName = m.name.split(':')[0].split('/').pop();
+    return `<button class="btn btn-ghost btn-sm model-filter-btn" style="font-size:11px;padding:3px 8px" data-model="${escHtmlModels(m.name)}" onclick="filterSkillsByModel('${escHtmlModels(m.name)}')">${escHtmlModels(shortName)}</button>`;
+  }).join('');
+}
+
+function filterSkillsByModel(modelName) {
+  _activeModelFilter = modelName;
+
+  // Highlight active card
+  document.querySelectorAll('.cap-card').forEach(c => {
+    c.classList.toggle('cap-card-active', c.dataset.model === modelName);
+  });
+  document.querySelectorAll('.model-filter-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.model === modelName);
+  });
+
+  if (_capsData) renderSkillsGrid(_capsData.skills, _capsData.models, modelName);
+}
+
+function renderSkillsGrid(skills, models, filterModel) {
+  const grid = document.getElementById('models-skills-grid');
+  if (!grid) return;
+  if (!skills?.length) { grid.innerHTML = '<div style="color:var(--color-text-muted);font-size:13px">Sin skills instaladas</div>'; return; }
+
+  // If filtering by model, get matched skill IDs for that model
+  let highlightedSkillIds = new Set();
+  if (filterModel) {
+    const model = models?.find(m => m.name === filterModel);
+    if (model) model.matchedSkills?.forEach(s => highlightedSkillIds.add(s.id));
+  }
+
+  // Sort: matched first when filtering
+  const sorted = [...skills].sort((a, b) => {
+    if (!filterModel) return 0;
+    const aMatch = highlightedSkillIds.has(a.id);
+    const bMatch = highlightedSkillIds.has(b.id);
+    if (aMatch && !bMatch) return -1;
+    if (!aMatch && bMatch) return 1;
+    return 0;
+  });
+
+  // Get best model for each skill
+  function bestModelsForSkill(skillId) {
+    if (!models) return [];
+    return models.filter(m => m.matchedSkills?.some(s => s.id === skillId) && !m.isCloud)
+      .map(m => m.name.split(':')[0].split('/').pop());
+  }
+
+  grid.innerHTML = sorted.map(s => {
+    const isMatch = filterModel ? highlightedSkillIds.has(s.id) : false;
+    const shouldDim = filterModel && !isMatch;
+    const tagBadges = (s.tags || []).map(t => `<span class="skill-tag">${escHtmlModels(t)}</span>`).join('');
+    const bestModels = bestModelsForSkill(s.id);
+    const modelHints = bestModels.slice(0, 3).map(n => `<code class="skill-model-hint">${escHtmlModels(n)}</code>`).join('');
+
+    return `<div class="skill-card${isMatch ? ' skill-card-match' : ''}${shouldDim ? ' skill-card-dim' : ''}">
+      <div class="skill-card-header">
+        <span class="skill-name">${escHtmlModels(s.name || s.id)}</span>
+        ${s.version ? `<span style="font-size:10px;color:var(--color-text-subtle)">${escHtmlModels(s.version)}</span>` : ''}
+      </div>
+      <div class="skill-desc">${escHtmlModels(s.description)}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px">
+        ${tagBadges}
+        ${modelHints ? `<span style="font-size:10px;color:var(--color-text-subtle);margin-left:4px">→</span>${modelHints}` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── Neo4j Graph Memory ───────────────────────────────────────────────────────
+
+async function fetchNeo4jStatus() {
+  const statusEl = document.getElementById('neo4j-status');
+  const statsEl = document.getElementById('neo4j-stats');
+  if (!statusEl) return;
+
+  statusEl.innerHTML = '<span style="color:var(--color-text-muted)">Conectando con el bridge...</span>';
+
+  try {
+    const [healthRes, statsRes] = await Promise.all([
+      apiFetch('/api/neo4j/health', { cache: 'no-store' }),
+      apiFetch('/api/neo4j/stats', { cache: 'no-store' }),
+    ]);
+    const health = await healthRes.json();
+    const stats = await statsRes.json();
+
+    if (health.ok && health.status === 'healthy') {
+      statusEl.innerHTML = `
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="status-dot status-dot-online"></span>
+          <span style="color:var(--color-success)">Bridge activo</span>
+          <span style="color:var(--color-text-subtle);font-size:11px">· Neo4j :7687 · FastAPI :7575</span>
+        </div>`;
+    } else {
+      statusEl.innerHTML = `
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="status-dot status-dot-offline"></span>
+          <span style="color:var(--color-destructive)">Bridge no disponible</span>
+          <span style="color:var(--color-text-subtle);font-size:11px">· ${escHtmlModels(health.error || health.detail || 'Sin conexion')}</span>
+        </div>
+        <div style="margin-top:8px;font-size:12px;color:var(--color-text-muted)">
+          Reinicia el gateway: <code>openclaw gateway restart</code> o inicia Neo4j manualmente
+        </div>`;
+    }
+
+    // Render stats
+    if (stats.ok && stats.counts) {
+      const c = stats.counts;
+      const statCards = [
+        { label: 'Entidades', value: c.entities ?? c.total_entities ?? '—' },
+        { label: 'Personas', value: c.persons ?? c.Person ?? '—' },
+        { label: 'Organizaciones', value: c.organizations ?? c.Organization ?? '—' },
+        { label: 'Objetos', value: c.objects ?? c.Object ?? '—' },
+        { label: 'Sesiones', value: c.sessions ?? c.Session ?? '—' },
+        { label: 'Mensajes', value: c.messages ?? c.Message ?? '—' },
+        { label: 'Tool Calls', value: c.tool_calls ?? c.ToolCall ?? '—' },
+        { label: 'Relaciones', value: c.relationships ?? c.total_relationships ?? '—' },
+      ];
+
+      statsEl.innerHTML = statCards.map(s => `
+        <div class="neo4j-stat-card">
+          <div class="neo4j-stat-value">${s.value}</div>
+          <div class="neo4j-stat-label">${s.label}</div>
+        </div>
+      `).join('');
+    } else {
+      statsEl.innerHTML = '<div style="color:var(--color-text-muted);font-size:13px">Sin datos (bridge no conectado)</div>';
+    }
+
+    initLucide();
+  } catch (e) {
+    statusEl.innerHTML = `<span style="color:var(--color-destructive)">Error: ${escHtmlModels(e.message)}</span>`;
+  }
+}
+
+async function neo4jRecall() {
+  const input = document.getElementById('neo4j-search-input');
+  const resultsEl = document.getElementById('neo4j-recall-results');
+  const query = input?.value?.trim();
+  if (!query) return;
+
+  resultsEl.innerHTML = '<span style="color:var(--color-text-muted)">Buscando...</span>';
+
+  try {
+    const res = await apiFetch('/api/neo4j/recall', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, limit: 10 }),
+    });
+    const data = await res.json();
+
+    if (!data.ok) {
+      resultsEl.innerHTML = `<span style="color:var(--color-destructive)">Error: ${escHtmlModels(data.error)}</span>`;
+      return;
+    }
+
+    const results = data.results || [];
+    if (results.length === 0) {
+      resultsEl.innerHTML = '<span style="color:var(--color-text-muted)">Sin resultados para esta busqueda</span>';
+      return;
+    }
+
+    resultsEl.innerHTML = results.map((r, i) => {
+      const name = r.name || r.entity_type || 'Unknown';
+      const type = r.entity_type || r._labels?.[0] || 'Object';
+      const desc = r.description || '';
+      const rels = (r._relationships || []).slice(0, 3);
+      const relHtml = rels.map(rel => `<span class="neo4j-rel-badge">${escHtmlModels(rel.type || '')} → ${escHtmlModels(rel.target_name || rel.target || '')}</span>`).join('');
+
+      return `<div class="neo4j-recall-result">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <span class="neo4j-node-badge neo4j-${type.toLowerCase()}" style="font-size:10px;padding:2px 6px">${escHtmlModels(type)}</span>
+          <strong style="font-size:13px">${escHtmlModels(name)}</strong>
+          <span style="font-size:10px;color:var(--color-text-subtle)">#${i + 1}</span>
+        </div>
+        ${desc ? `<div style="font-size:12px;color:var(--color-text-muted);margin-bottom:4px">${escHtmlModels(desc)}</div>` : ''}
+        ${relHtml ? `<div style="display:flex;gap:4px;flex-wrap:wrap">${relHtml}</div>` : ''}
+      </div>`;
+    }).join('');
+  } catch (e) {
+    resultsEl.innerHTML = `<span style="color:var(--color-destructive)">Error: ${escHtmlModels(e.message)}</span>`;
+  }
+}
+
+function neo4jSetCypher(cypher) {
+  const el = document.getElementById('neo4j-cypher-input');
+  if (el) el.value = cypher;
+}
+
+async function neo4jRunCypher() {
+  const input = document.getElementById('neo4j-cypher-input');
+  const resultsEl = document.getElementById('neo4j-cypher-results');
+  const cypher = input?.value?.trim();
+  if (!cypher) return;
+
+  resultsEl.innerHTML = '<span style="color:var(--color-text-muted)">Ejecutando...</span>';
+
+  try {
+    const res = await apiFetch('/api/neo4j/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cypher, limit: 30 }),
+    });
+    const data = await res.json();
+
+    if (!data.ok) {
+      resultsEl.innerHTML = `<span style="color:var(--color-destructive)">Error: ${escHtmlModels(data.error)}</span>`;
+      return;
+    }
+
+    const results = data.results || [];
+    if (results.length === 0) {
+      resultsEl.innerHTML = '<span style="color:var(--color-text-muted)">Sin resultados</span>';
+      return;
+    }
+
+    // Render as table
+    const keys = Object.keys(results[0]);
+    const headerRow = keys.map(k => `<th style="text-align:left;padding:6px 10px;border-bottom:1px solid var(--color-border);font-size:11px;color:var(--color-text-subtle)">${escHtmlModels(k)}</th>`).join('');
+    const bodyRows = results.map(row => {
+      const cells = keys.map(k => {
+        let v = row[k];
+        if (v && typeof v === 'object') v = JSON.stringify(v);
+        return `<td style="padding:5px 10px;border-bottom:1px solid var(--color-border);font-size:12px;max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtmlModels(String(v ?? ''))}</td>`;
+      }).join('');
+      return `<tr>${cells}</tr>`;
+    }).join('');
+
+    resultsEl.innerHTML = `
+      <div style="overflow-x:auto;border:1px solid var(--color-border);border-radius:6px">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr>${headerRow}</tr></thead>
+          <tbody>${bodyRows}</tbody>
+        </table>
+      </div>
+      <div style="margin-top:6px;font-size:11px;color:var(--color-text-subtle)">${results.length} resultado${results.length !== 1 ? 's' : ''}</div>`;
+  } catch (e) {
+    resultsEl.innerHTML = `<span style="color:var(--color-destructive)">Error: ${escHtmlModels(e.message)}</span>`;
+  }
+}
+
+async function neo4jStoreEntity() {
+  const name = document.getElementById('neo4j-entity-name')?.value?.trim();
+  const type = document.getElementById('neo4j-entity-type')?.value || 'Object';
+  const desc = document.getElementById('neo4j-entity-desc')?.value?.trim();
+  const resultEl = document.getElementById('neo4j-store-result');
+
+  if (!name) { resultEl.innerHTML = '<span style="color:var(--color-warning)">Nombre requerido</span>'; return; }
+
+  resultEl.innerHTML = '<span style="color:var(--color-text-muted)">Guardando...</span>';
+
+  try {
+    const res = await apiFetch('/api/neo4j/store', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'entity',
+        data: {
+          label: type,
+          properties: { name, description: desc || '' },
+          relationships: [],
+        },
+      }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      resultEl.innerHTML = `<span style="color:var(--color-success)">Entidad "${escHtmlModels(name)}" (${type}) guardada</span>`;
+      document.getElementById('neo4j-entity-name').value = '';
+      document.getElementById('neo4j-entity-desc').value = '';
+      setTimeout(fetchNeo4jStatus, 1000);
+    } else {
+      resultEl.innerHTML = `<span style="color:var(--color-destructive)">Error: ${escHtmlModels(data.error)}</span>`;
+    }
+  } catch (e) {
+    resultEl.innerHTML = `<span style="color:var(--color-destructive)">Error: ${escHtmlModels(e.message)}</span>`;
+  }
+}
