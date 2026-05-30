@@ -35,7 +35,12 @@ const OPENCLAW_CONFIG = process.env.OPENCLAW_CONFIG || path.join(process.env.HOM
 const OPENCLAW_LOG_DIR = '/tmp/openclaw';
 const HA_URL = process.env.HA_URL || 'http://127.0.0.1:8123';
 const ENV_GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL || '';
-const OPENCLAW_BIN = process.env.OPENCLAW_BIN || '/Users/devjaime/Library/pnpm/openclaw';
+const AGENTWORKROOM_ROOT = process.env.AGENTWORKROOM_ROOT || path.join(process.env.HOME || '', 'Projects', 'AgentWorkroom');
+const OPENCLAW_BIN = process.env.OPENCLAW_BIN || path.join(AGENTWORKROOM_ROOT, 'dist', 'index.js');
+const OPENCLAW_UPDATE_BIN = process.env.OPENCLAW_UPDATE_BIN || '/Users/devjaime/Library/pnpm/openclaw';
+const AGENTWORKROOM_START = process.env.AGENTWORKROOM_START || path.join(AGENTWORKROOM_ROOT, 'scripts', 'agentworkroom-start-local.sh');
+const AGENTWORKROOM_STOP = process.env.AGENTWORKROOM_STOP || path.join(AGENTWORKROOM_ROOT, 'scripts', 'agentworkroom-stop-local.sh');
+const AGENTWORKROOM_STATUS = process.env.AGENTWORKROOM_STATUS || path.join(AGENTWORKROOM_ROOT, 'scripts', 'agentworkroom-status-local.sh');
 const DOCKER_BIN = process.env.DOCKER_BIN || (
   fs.existsSync('/usr/local/bin/docker') ? '/usr/local/bin/docker' :
   fs.existsSync('/opt/homebrew/bin/docker') ? '/opt/homebrew/bin/docker' :
@@ -62,6 +67,17 @@ const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
 const OPENCODE_BIN = process.env.OPENCODE_BIN || '/Users/devjaime/.opencode/bin/opencode';
 const OPENCODE_PORT = Number(process.env.OPENCODE_PORT || 4096);
 const CLAUDE_SKILLS_DIR = process.env.CLAUDE_SKILLS_DIR || path.join(process.env.HOME || '', '.claude', 'skills');
+
+function quoteShell(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function runAgentWorkroomScript(scriptPath, timeout = 60000) {
+  if (!fs.existsSync(scriptPath)) {
+    return { ok: false, code: 1, output: `Script not found: ${scriptPath}` };
+  }
+  return runShell(`cd ${quoteShell(AGENTWORKROOM_ROOT)} && /bin/bash ${quoteShell(scriptPath)}`, timeout);
+}
 
 // ── Model capability database ─────────────────────────────────────────────────
 // Keyed by partial model name (lowercased). First match wins.
@@ -469,6 +485,26 @@ function runShell(cmd, timeout = 12000) {
       encoding: 'utf8',
       shell: '/bin/bash',
       env: { ...process.env, PATH: RUNTIME_PATH },
+    }).trim();
+    return { ok: true, output: out };
+  } catch (err) {
+    const stdout = err?.stdout ? String(err.stdout).trim() : '';
+    const stderr = err?.stderr ? String(err.stderr).trim() : '';
+    return {
+      ok: false,
+      output: [stdout, stderr, String(err?.message || 'command failed')].filter(Boolean).join('\n'),
+    };
+  }
+}
+
+function runShellWithEnv(cmd, extraEnv = {}, timeout = 12000) {
+  try {
+    const out = execSync(cmd, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout,
+      encoding: 'utf8',
+      shell: '/bin/bash',
+      env: { ...process.env, PATH: RUNTIME_PATH, ...extraEnv },
     }).trim();
     return { ok: true, output: out };
   } catch (err) {
@@ -2026,6 +2062,12 @@ let statusPayloadCache = null;
 let statusPayloadAtMs = 0;
 let statusPayloadInflight = null;
 
+function invalidateStatusPayloadCache() {
+  statusPayloadCache = null;
+  statusPayloadAtMs = 0;
+  statusPayloadInflight = null;
+}
+
 async function getStatusPayload(force = false) {
   const now = Date.now();
   const fresh = statusPayloadCache && ((now - statusPayloadAtMs) < STATUS_PAYLOAD_TTL_MS);
@@ -2132,15 +2174,20 @@ async function performServiceAction(service, action, cfg) {
     const gatewayUrl = resolveGatewayUrl(cfg);
     const port = portFromGatewayUrl(gatewayUrl);
     const token = String(cfg?.gateway?.auth?.token || '').trim();
+    const openclawEnv = token ? { OPENCLAW_GATEWAY_TOKEN: token } : {};
+
     if (action === 'stop' || action === 'restart') {
-      runShell(`pkill -9 -f 'openclaw gateway run --bind loopback --port ${port}' || true`);
+      const stopped = runAgentWorkroomScript(AGENTWORKROOM_STOP, 30000);
+      if (!stopped.ok) {
+        return { ok: false, message: `No se pudo detener servicio OpenClaw:\n${stopped.output}` };
+      }
+      // Clean stale memory bridge processes that may survive abrupt restarts.
+      runShell(`pkill -f '/Users/devjaime/.openclaw/extensions/openclaw-neo4j-memory/server/main.py' >/dev/null 2>&1 || true`, 5000);
     }
     if (action === 'start' || action === 'restart') {
-      const authFlags = token ? `--auth token --token "${token}"` : '';
-      const startCmd = `nohup "${OPENCLAW_BIN}" gateway run --bind loopback --port ${port} ${authFlags} --force > /tmp/openclaw-gateway.log 2>&1 &`;
-      const started = runShell(startCmd);
+      const started = runAgentWorkroomScript(AGENTWORKROOM_START, 120000);
       if (!started.ok) {
-        return { ok: false, message: `No se pudo iniciar OpenClaw:\n${started.output}` };
+        return { ok: false, message: `No se pudo iniciar servicio OpenClaw:\n${started.output}` };
       }
     }
     let running = false;
@@ -2149,10 +2196,39 @@ async function performServiceAction(service, action, cfg) {
       if (running) break;
       await new Promise((r) => setTimeout(r, 800));
     }
+    let rpcOk = false;
+    if (running) {
+      const statusCheck = fs.existsSync(AGENTWORKROOM_STATUS)
+        ? runAgentWorkroomScript(AGENTWORKROOM_STATUS, 30000)
+        : null;
+      if (statusCheck && !statusCheck.ok) {
+        return {
+          ok: false,
+          message: `OpenClaw levantó el puerto, pero AgentWorkroom reportó estado no saludable:\n${statusCheck.output}`,
+          running,
+          rpcOk: false,
+        };
+      }
+      const rpc = runShellWithEnv(
+        `"${OPENCLAW_BIN}" gateway status --url "${gatewayUrl}" --require-rpc --json`,
+        openclawEnv,
+        20000,
+      );
+      rpcOk = rpc.ok;
+      if (!rpcOk) {
+        return {
+          ok: false,
+          message: `OpenClaw está escuchando en puerto, pero RPC falló:\n${rpc.output}`,
+          running,
+          rpcOk,
+        };
+      }
+    }
     return {
       ok: true,
       message: `OpenClaw ${action} ejecutado`,
       running,
+      rpcOk,
     };
   }
 
@@ -2237,9 +2313,10 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (u.pathname === '/api/update-status') {
-    const currentVersionRaw = run(`"${OPENCLAW_BIN}" --version`);
+    const updateBin = fs.existsSync(OPENCLAW_UPDATE_BIN) ? OPENCLAW_UPDATE_BIN : OPENCLAW_BIN;
+    const currentVersionRaw = run(`"${updateBin}" --version`);
     const currentVersion = isErr(currentVersionRaw) ? '' : String(currentVersionRaw || '').trim();
-    const out = runShell(`"${OPENCLAW_BIN}" update status --json`, 20000);
+    const out = runShell(`"${updateBin}" update status --json`, 20000);
     if (!out.ok) {
       sendJson(res, 500, { ok: false, message: 'No se pudo consultar update status' });
       return;
@@ -2280,6 +2357,7 @@ const server = http.createServer(async (req, res) => {
     const service = String(body?.service || '').trim();
     const action = String(body?.action || '').trim();
     const out = await performServiceAction(service, action, cfg);
+    if (out.ok) invalidateStatusPayloadCache();
     const statusCode = out.ok ? 200 : 400;
     sendJson(res, statusCode, out);
     return;
