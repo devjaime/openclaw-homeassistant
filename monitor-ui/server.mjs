@@ -7,9 +7,18 @@ import { fileURLToPath } from 'node:url';
 import { execSync, exec } from 'node:child_process';
 import net from 'node:net';
 import os from 'node:os';
+import zlib from 'node:zlib';
 import { getSecret } from './src/secrets.mjs';
 import { buildSafeEnv } from './src/safe-env.mjs';
 import { classifyLine, appendAuditEntry, readAuditLog, updateAuditEntry } from './src/prompt-auditor.mjs';
+import {
+  initImanDb,
+  getImanMap,
+  createImanAgent,
+  selectImanAgent,
+  addImanMemory,
+  recommendImanAgent,
+} from './src/iman-store.mjs';
 import {
   initDb as initAutonomousDb,
   createSession as createAutoSession,
@@ -712,6 +721,55 @@ function collectResourceUsage(runtimePort) {
       n8n: collectDockerUsage('n8n'),
     },
   };
+}
+
+function collectDiskUsage() {
+  try {
+    const out = run("df -k | grep -E '^/dev/disk' | grep -v 'devfs' | tail -10");
+    if (isErr(out) || !out) return { disks: [], error: 'df failed' };
+    const lines = String(out).split('\n').filter(Boolean);
+    return {
+      disks: lines.map((line) => {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 9) return null;
+        return {
+          mount: parts[parts.length - 1] || '',
+          totalGb: parseFloat((n(parts[1]) / 1024 / 1024).toFixed(1)),
+          usedGb: parseFloat((n(parts[2]) / 1024 / 1024).toFixed(1)),
+          availGb: parseFloat((n(parts[3]) / 1024 / 1024).toFixed(1)),
+          usePct: n(parts[4].replace(/%/g, '')),
+        };
+      }).filter(Boolean),
+    };
+  } catch (e) {
+    return { disks: [], error: String(e.message) };
+  }
+}
+
+function collectTopProcesses(limit) {
+  limit = limit || 10;
+  try {
+    const cmd = 'ps aux | head -' + String(limit + 1);
+    const out = run(cmd);
+    if (isErr(out) || !out) return { processes: [], error: 'ps failed' };
+    const lines = String(out).split('\n').slice(1).filter(Boolean);
+    return {
+      processes: lines.slice(0, limit).map((line) => {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 11) return null;
+        return {
+          user: parts[0],
+          pid: n(parts[1]),
+          cpuPct: n(parts[2]),
+          memPct: n(parts[3]),
+          rssMb: parseFloat((n(parts[5]) / 1024).toFixed(1)),
+          command: (parts.slice(10).join(' ') || '').slice(0, 80),
+        };
+      }).filter(Boolean),
+    };
+  } catch (e) {
+    return { processes: [], error: String(e.message) };
+  }
 }
 
 function collectProcessNetworkTrace(pid) {
@@ -1559,21 +1617,74 @@ async function collectProjectStats() {
   return { projects, totals };
 }
 
-function staticFile(res, relPath, contentType = 'text/plain; charset=utf-8') {
+function getMimeType(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  const mimeTypes = {
+    '.js': 'application/javascript; charset=utf-8',
+    '.mjs': 'application/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.html': 'text/html; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.svg': 'image/svg+xml',
+    '.ico': 'image/x-icon',
+    '.woff': 'font/woff',
+    '.woff2': 'font/woff2',
+    '.ttf': 'font/ttf',
+    '.eot': 'application/vnd.ms-fontobject',
+    '.br': 'application/brotli',
+    '.gz': 'application/gzip',
+  };
+  return mimeTypes[ext] || 'application/octet-stream';
+}
+
+function staticFile(req, res, relPath, contentType = 'text/plain; charset=utf-8') {
   const file = path.join(PUBLIC_DIR, relPath);
   if (!fs.existsSync(file)) {
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('Not found');
     return;
   }
+
+  const acceptEncoding = req?.headers?.['accept-encoding'] || '';
+  const isVersioned = /\?v=\d+/.test(relPath) || /\/[a-f0-9]{8,}\./.test(relPath);
+  const cacheControl = isVersioned
+    ? 'public, max-age=31536000, immutable'
+    : 'no-store, no-cache, must-revalidate, proxy-revalidate';
+
   const data = fs.readFileSync(file);
-  res.writeHead(200, {
+
+  const headers = {
     'Content-Type': contentType,
-    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
-    'Pragma': 'no-cache',
-    'Expires': '0',
-  });
-  res.end(data);
+    'Cache-Control': cacheControl,
+    'Pragma': cacheControl.includes('no-cache') ? 'no-cache' : undefined,
+    'Expires': isVersioned ? new Date(Date.now() + 31536000000).toUTCString() : '0',
+    'Vary': 'Accept-Encoding',
+  };
+
+  const useBrotli = acceptEncoding.includes('br') && !contentType.includes('image');
+  const useGzip = !useBrotli && acceptEncoding.includes('gzip') && !contentType.includes('image');
+
+  if (useBrotli) {
+    const compressed = zlib.brotliCompressSync(data, { quality: 11 });
+    headers['Content-Encoding'] = 'br';
+    headers['Content-Length'] = compressed.length;
+    res.writeHead(200, headers);
+    res.end(compressed);
+  } else if (useGzip) {
+    const compressed = zlib.gzipSync(data, { level: 9 });
+    headers['Content-Encoding'] = 'gzip';
+    headers['Content-Length'] = compressed.length;
+    res.writeHead(200, headers);
+    res.end(compressed);
+  } else {
+    headers['Content-Length'] = data.length;
+    res.writeHead(200, headers);
+    res.end(data);
+  }
 }
 
 function publicAssetsVersion() {
@@ -2299,6 +2410,13 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (u.pathname === '/api/userspace') {
+    const diskData = collectDiskUsage();
+    const procData = collectTopProcesses(15);
+    sendJson(res, 200, { ok: true, disk: diskData, processes: procData });
+    return;
+  }
+
   if (u.pathname === '/api/gateway-auth') {
     const cfg = await readOpenClawConfig();
     const gatewayUrl = resolveGatewayUrl(cfg);
@@ -2348,6 +2466,149 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname === '/api/homeassistant') {
     const data = await getHomeAssistantLogTail(300);
     sendJson(res, 200, { lines: data });
+    return;
+  }
+
+  if (u.pathname === '/api/ha/states' && req.method === 'GET') {
+    const statesRes = await haApi('/api/states');
+    if (!statesRes.ok) {
+      sendJson(res, 500, { ok: false, error: statesRes.error });
+      return;
+    }
+    const states = statesRes.data || [];
+    const cameras = states.filter(s => String(s?.entity_id || '').startsWith('camera.'));
+    const vacuums = states.filter(s => String(s?.entity_id || '').startsWith('vacuum.'));
+    const lights = states.filter(s => String(s?.entity_id || '').startsWith('light.'));
+    const switches = states.filter(s => String(s?.entity_id || '').startsWith('switch.'));
+    sendJson(res, 200, { ok: true, states, cameras, vacuums, lights, switches, total: states.length });
+    return;
+  }
+
+  if (u.pathname === '/api/ha/cameras' && req.method === 'GET') {
+    const statesRes = await haApi('/api/states');
+    if (!statesRes.ok) {
+      sendJson(res, 500, { ok: false, error: statesRes.error });
+      return;
+    }
+    const cameras = (statesRes.data || [])
+      .filter(s => String(s?.entity_id || '').startsWith('camera.'))
+      .map(c => ({
+        entityId: c.entity_id,
+        name: c.attributes?.friendly_name || c.entity_id,
+        state: c.state,
+        lastChanged: c.last_changed,
+        thumbnail: c.attributes?.entity_picture || null,
+      }));
+    sendJson(res, 200, { ok: true, cameras });
+    return;
+  }
+
+  if (u.pathname === '/api/ha/vacuum' && req.method === 'GET') {
+    const vacuumData = await collectVacuumStatus();
+    sendJson(res, 200, vacuumData);
+    return;
+  }
+
+  if (u.pathname === '/api/ha/services' && req.method === 'GET') {
+    const servicesRes = await haApi('/api/services');
+    if (!servicesRes.ok) {
+      sendJson(res, 500, { ok: false, error: servicesRes.error });
+      return;
+    }
+    sendJson(res, 200, { ok: true, services: servicesRes.data || {} });
+    return;
+  }
+
+  if (u.pathname === '/api/ha/call-service' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const domain = String(body?.domain || '').trim();
+    const service = String(body?.service || '').trim();
+    const entityId = String(body?.entityId || '').trim();
+    const data = body?.data || {};
+
+    if (!domain || !service) {
+      sendJson(res, 400, { ok: false, message: 'domain y service son requeridos' });
+      return;
+    }
+
+    const payload = { ...data };
+    if (entityId) payload.entity_id = entityId;
+
+    const out = await haApi(`/api/services/${domain}/${service}`, {
+      method: 'POST',
+      body: payload,
+    });
+
+    sendJson(res, out.ok ? 200 : 500, out);
+    return;
+  }
+
+  if (u.pathname === '/api/ha/entity' && req.method === 'GET') {
+    const entityId = u.searchParams.get('entity_id');
+    if (!entityId) {
+      sendJson(res, 400, { ok: false, message: 'entity_id es requerido' });
+      return;
+    }
+    const out = await haApi(`/api/states/${entityId}`);
+    if (out.ok) {
+      sendJson(res, 200, { ok: true, state: out.data });
+    } else {
+      sendJson(res, 404, { ok: false, error: out.error });
+    }
+    return;
+  }
+
+  if (u.pathname === '/api/n8n/status' && req.method === 'GET') {
+    const n8nPort = 5678;
+    let running = false;
+    try {
+      const check = await new Promise((resolve) => {
+        const req = http.request({ hostname: '127.0.0.1', port: n8nPort, path: '/', method: 'GET' }, (res) => resolve(true));
+        req.on('error', () => resolve(false));
+        req.setTimeout(2000, () => { req.destroy(); resolve(false); });
+        req.end();
+      });
+      running = check;
+    } catch { running = false; }
+    sendJson(res, 200, { ok: true, running, url: `http://127.0.0.1:${n8nPort}` });
+    return;
+  }
+
+  if (u.pathname === '/api/openclaw/status' && req.method === 'GET') {
+    const openclawPort = 18789;
+    let running = false;
+    let version = '';
+    try {
+      const check = await new Promise((resolve) => {
+        const req = http.request({ hostname: '127.0.0.1', port: openclawPort, path: '/status', method: 'GET' }, (res) => resolve(true));
+        req.on('error', () => resolve(false));
+        req.setTimeout(2000, () => { req.destroy(); resolve(false); });
+        req.end();
+      });
+      running = check;
+    } catch { running = false; }
+    try {
+      version = execSync(`"${OPENCLAW_BIN}" --version 2>/dev/null || echo ""`, { timeout: 3000 }).toString().trim();
+    } catch {}
+    sendJson(res, 200, { ok: true, running, port: openclawPort, version, url: `http://127.0.0.1:${openclawPort}` });
+    return;
+  }
+
+  if (u.pathname === '/api/hermes/status' && req.method === 'GET') {
+    const HERMES_CONFIG = path.join(process.env.HOME || '', '.hermes', 'config.yaml');
+    const HERMES_ENV = path.join(process.env.HOME || '', '.hermes', '.env');
+    let model = 'unknown';
+    let provider = 'unknown';
+    let memoryEnabled = false;
+    try {
+      const configContent = fs.readFileSync(HERMES_CONFIG, 'utf8');
+      const modelMatch = configContent.match(/default:\s*(\S+)/);
+      const providerMatch = configContent.match(/provider:\s*(\S+)/);
+      if (modelMatch) model = modelMatch[1];
+      if (providerMatch) provider = providerMatch[1];
+      memoryEnabled = configContent.includes('memory_enabled: true');
+    } catch {}
+    sendJson(res, 200, { ok: true, model, provider, memoryEnabled });
     return;
   }
 
@@ -3023,20 +3284,76 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (u.pathname === '/app.js') {
-    return staticFile(res, 'app.js', 'application/javascript; charset=utf-8');
+  // ── Imán: mapa persistente de agentes y capacidades ────────────────────────
+  if (u.pathname === '/api/iman/map' && req.method === 'GET') {
+    sendJson(res, 200, { ok: true, ...getImanMap() });
+    return;
   }
-  if (u.pathname === '/workroom.js') {
-    return staticFile(res, 'workroom.js', 'application/javascript; charset=utf-8');
+
+  if (u.pathname === '/api/iman/agents' && req.method === 'POST') {
+    try {
+      const id = createImanAgent(await readJsonBody(req));
+      sendJson(res, 201, { ok: true, id, ...getImanMap() });
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: error.message });
+    }
+    return;
   }
+
+  if (u.pathname === '/api/iman/select' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const activeAgentId = selectImanAgent(String(body?.agentId || ''));
+      sendJson(res, 200, { ok: true, activeAgentId });
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: error.message });
+    }
+    return;
+  }
+
+  if (u.pathname === '/api/iman/memory' && req.method === 'POST') {
+    try {
+      const id = addImanMemory(await readJsonBody(req));
+      sendJson(res, 201, { ok: true, id, ...getImanMap() });
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: error.message });
+    }
+    return;
+  }
+
+  if (u.pathname === '/api/iman/recommend' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    sendJson(res, 200, { ok: true, ...recommendImanAgent(body?.task || '') });
+    return;
+  }
+
+  if (u.pathname === '/app.js' || u.pathname === '/workroom.js') {
+    return sendJson(res, 404, { error: 'Not found' });
+  }
+
+  if (u.pathname.startsWith('/assets/')) {
+    const relPath = u.pathname.slice(1);
+    return staticFile(req, res, relPath, getMimeType(relPath));
+  }
+
   if (u.pathname === '/styles.css') {
-    return staticFile(res, 'styles.css', 'text/css; charset=utf-8');
+    const assetsDir = path.join(PUBLIC_DIR, 'assets');
+    try {
+      const files = fs.readdirSync(assetsDir);
+      const cssFile = files.find(f => f.startsWith('index-') && f.endsWith('.css'));
+      if (cssFile) {
+        return staticFile(req, res, `assets/${cssFile}`, 'text/css; charset=utf-8');
+      }
+    } catch {}
+    return staticFile(req, res, 'assets/index-BCeuojQC.css', 'text/css; charset=utf-8');
   }
+
   if (u.pathname === '/workroom' || u.pathname === '/workroom.html') {
-    return serveHtmlWithToken(res, 'workroom.html');
+    return staticFile(req, res, 'index.html', 'text/html; charset=utf-8');
   }
+
   if (u.pathname === '/' || u.pathname === '/index.html') {
-    return serveHtmlWithToken(res, 'index.html');
+    return staticFile(req, res, 'index.html', 'text/html; charset=utf-8');
   }
 
   res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -3051,10 +3368,14 @@ async function scanLogsForAudit() {
   for (const dir of OPENCLAW_LOG_DIRS) {
     try {
       if (!fs.existsSync(dir)) continue;
-      const files = fs.readdirSync(dir).filter((f) => f.endsWith('.log')).map((f) => path.join(dir, f));
-      for (const file of files.slice(-3)) { // solo los 3 más recientes
+      const files = fs.readdirSync(dir).filter((f) => f.endsWith('.log')).map((f) => ({ file: path.join(dir, f), mtime: fs.statSync(path.join(dir, f)).mtimeMs }));
+      files.sort((a, b) => b.mtime - a.mtime);
+      for (const { file } of files.slice(0, 3)) { // solo los 3 más recientes
         try {
-          const lines = fs.readFileSync(file, 'utf8').split('\n').slice(-200); // últimas 200 líneas
+          const stat = fs.statSync(file);
+          if (stat.size > 100 * 1024 * 1024) continue; // skip files > 100MB
+          const content = fs.readFileSync(file, 'utf8');
+          const lines = content.split('\n').slice(-200);
           for (const line of lines) {
             if (!line.trim() || _auditSeenLines.has(line)) continue;
             _auditSeenLines.add(line);
@@ -3063,7 +3384,6 @@ async function scanLogsForAudit() {
           }
         } catch { /* archivo ilegible */ }
       }
-      // Limitar el Set de vistos a 2000 entradas para no crecer indefinidamente
       if (_auditSeenLines.size > 2000) {
         const arr = [..._auditSeenLines];
         arr.splice(0, arr.length - 1000).forEach((l) => _auditSeenLines.delete(l));
@@ -3077,6 +3397,7 @@ setInterval(scanLogsForAudit, 15000);
 scanLogsForAudit(); // primera vez al arrancar
 
 initAutonomousDb(); // init autonomous agent SQLite DB
+initImanDb(); // init persistent agent/capability graph
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`Monitor UI en http://127.0.0.1:${PORT}`);
