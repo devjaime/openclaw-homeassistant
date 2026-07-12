@@ -4,10 +4,11 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execSync, exec } from 'node:child_process';
+import { execSync, exec, spawn } from 'node:child_process';
 import net from 'node:net';
 import os from 'node:os';
 import zlib from 'node:zlib';
+import { DatabaseSync } from 'node:sqlite';
 import { getSecret } from './src/secrets.mjs';
 import { buildSafeEnv } from './src/safe-env.mjs';
 import { classifyLine, appendAuditEntry, readAuditLog, updateAuditEntry } from './src/prompt-auditor.mjs';
@@ -76,6 +77,8 @@ const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
 const OPENCODE_BIN = process.env.OPENCODE_BIN || '/Users/devjaime/.opencode/bin/opencode';
 const OPENCODE_PORT = Number(process.env.OPENCODE_PORT || 4096);
 const CLAUDE_SKILLS_DIR = process.env.CLAUDE_SKILLS_DIR || path.join(process.env.HOME || '', '.claude', 'skills');
+const HERMES_HOME = process.env.HERMES_HOME || path.join(process.env.HOME || '', '.hermes');
+const HERMES_CLI = process.env.HERMES_CLI || path.join(HERMES_HOME, 'hermes-agent', 'venv', 'bin', 'python');
 
 function quoteShell(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
@@ -977,6 +980,169 @@ async function getHomeAssistantLogTail(limit = 120) {
     } catch {}
   }
   return [];
+}
+
+async function ensureNeo4jBridge() {
+  const bridgeUrl = 'http://127.0.0.1:7575/memory/health';
+  try {
+    const response = await fetch(bridgeUrl, { signal: AbortSignal.timeout(2500) });
+    const data = await response.json();
+    if (response.ok && data?.neo4j === 'connected') return true;
+  } catch {}
+
+  const listener = findListeningPid(7575);
+  if (listener?.pid) {
+    const command = run(`ps -p ${listener.pid} -o command=`);
+    if (!isErr(command) && String(command).includes('openclaw-neo4j-memory/server/main.py')) {
+      try { process.kill(listener.pid, 'SIGTERM'); } catch {}
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    } else {
+      return false;
+    }
+  }
+
+  const credentialsPath = path.join(process.env.HOME || '', '.local', 'share', 'neo4j-local', 'openclaw-memory', 'credentials.json');
+  const scriptPath = path.join(process.env.HOME || '', '.openclaw', 'extensions', 'openclaw-neo4j-memory', 'server', 'main.py');
+  if (!fs.existsSync(credentialsPath) || !fs.existsSync(scriptPath)) return false;
+  const credentials = safeJsonParse(fs.readFileSync(credentialsPath, 'utf8'), {});
+  if (!credentials?.username || !credentials?.password) return false;
+  const python = '/Library/Frameworks/Python.framework/Versions/3.12/bin/python3';
+  if (!fs.existsSync(python)) return false;
+  const logFd = fs.openSync('/tmp/openclaw-neo4j-bridge.log', 'a');
+  const child = spawn(python, [scriptPath], {
+    detached: true,
+    stdio: ['ignore', logFd, logFd],
+    env: {
+      ...process.env,
+      NEO4J_URI: 'bolt://127.0.0.1:7687',
+      NEO4J_USER: credentials.username,
+      NEO4J_PASSWORD: credentials.password,
+      AGENT_ID: 'main',
+      BRIDGE_PORT: '7575',
+    },
+  });
+  child.unref();
+  fs.closeSync(logFd);
+  for (let attempt = 0; attempt < 15; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    try {
+      const response = await fetch(bridgeUrl, { signal: AbortSignal.timeout(2000) });
+      const data = await response.json();
+      if (response.ok && data?.neo4j === 'connected') return true;
+    } catch {}
+  }
+  return false;
+}
+
+function messageText(content) {
+  if (typeof content === 'string') return content.trim();
+  if (!Array.isArray(content)) return '';
+  return content.filter((part) => part?.type === 'text' && part?.text).map((part) => part.text).join('\n').trim();
+}
+
+async function collectOpenClawActivity(limit = 8) {
+  const root = path.join(process.env.HOME || '', '.openclaw', 'agents', 'main', 'sessions');
+  let files = [];
+  try {
+    files = fs.readdirSync(root)
+      .filter((name) => name.endsWith('.jsonl') && !name.endsWith('.trajectory.jsonl'))
+      .map((name) => ({ file: path.join(root, name), mtime: fs.statSync(path.join(root, name)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime)
+      .slice(0, limit);
+  } catch { return []; }
+
+  return Promise.all(files.map(async ({ file, mtime }) => {
+    const rows = (await readLastLines(file, 700)).map((line) => safeJsonParse(line, null)).filter(Boolean);
+    const messages = rows.filter((row) => row.type === 'message' && row.message);
+    const modelRow = [...rows].reverse().find((row) => row.type === 'model_change' || row?.message?.model);
+    const users = messages.filter((row) => row.message.role === 'user').map((row) => messageText(row.message.content)).filter(Boolean);
+    const assistants = messages.filter((row) => row.message.role === 'assistant').map((row) => messageText(row.message.content)).filter(Boolean);
+    const tools = messages.filter((row) => row.message.role === 'toolResult').map((row) => row.message.toolName).filter(Boolean);
+    const lastRow = messages.at(-1);
+    return {
+      id: path.basename(file, '.jsonl'),
+      updatedAt: lastRow?.timestamp || new Date(mtime).toISOString(),
+      model: modelRow?.modelId || modelRow?.message?.model || '',
+      title: users.at(-1)?.slice(0, 120) || 'Sesión sin título',
+      summary: assistants.at(-1)?.slice(0, 360) || '',
+      messageCount: messages.length,
+      toolCount: tools.length,
+      tools: [...new Set(tools)].slice(0, 8),
+      source: 'openclaw',
+    };
+  }));
+}
+
+function collectHermesActivity(limit = 8) {
+  const dbPath = path.join(HERMES_HOME, 'state.db');
+  if (!fs.existsSync(dbPath)) return [];
+  let hermesDb;
+  try {
+    hermesDb = new DatabaseSync(dbPath, { readOnly: true });
+    const sessions = hermesDb.prepare(`
+      SELECT id, source, model, started_at, ended_at, message_count, tool_call_count,
+             input_tokens, output_tokens
+      FROM sessions ORDER BY started_at DESC LIMIT ?
+    `).all(limit);
+    const lastMessages = hermesDb.prepare(`
+      SELECT role, content, timestamp FROM messages
+      WHERE session_id = ? AND role IN ('user','assistant')
+      ORDER BY timestamp DESC LIMIT 12
+    `);
+    return sessions.map((session) => {
+      const messages = lastMessages.all(session.id);
+      const lastUser = messages.find((row) => row.role === 'user');
+      const lastAssistant = messages.find((row) => row.role === 'assistant');
+      return {
+        id: session.id,
+        updatedAt: new Date(Number(session.ended_at || session.started_at) * 1000).toISOString(),
+        model: session.model || '',
+        title: String(lastUser?.content || `${session.source || 'Hermes'} session`).slice(0, 120),
+        summary: String(lastAssistant?.content || '').slice(0, 360),
+        messageCount: Number(session.message_count || 0),
+        toolCount: Number(session.tool_call_count || 0),
+        tokens: Number(session.input_tokens || 0) + Number(session.output_tokens || 0),
+        source: 'hermes',
+      };
+    });
+  } catch { return []; }
+  finally { try { hermesDb?.close(); } catch {} }
+}
+
+function collectHermesMemories() {
+  const memoryFile = path.join(HERMES_HOME, 'memories', 'MEMORY.md');
+  try {
+    const raw = fs.readFileSync(memoryFile, 'utf8');
+    const sections = raw.split(/(?=^#\s+)/m).map((part) => part.trim()).filter(Boolean);
+    return sections.slice(0, 20).map((section, index) => {
+      const lines = section.split('\n');
+      return { id: `hermes-memory-${index}`, title: lines[0].replace(/^#+\s*/, ''), summary: lines.slice(1).join(' ').replace(/\s+/g, ' ').slice(0, 300) };
+    });
+  } catch { return []; }
+}
+
+function collectAgentUpdates() {
+  const updateBin = fs.existsSync(OPENCLAW_UPDATE_BIN) ? OPENCLAW_UPDATE_BIN : OPENCLAW_BIN;
+  const currentRaw = run(`"${updateBin}" --version`);
+  const status = runShell(`"${updateBin}" update status --json`, 20000);
+  const update = status.ok ? extractTrailingJsonObject(status.output) : null;
+  const hermesVersion = fs.existsSync(HERMES_CLI)
+    ? runShell(`"${HERMES_CLI}" -m hermes_cli.main --version`, 12000)
+    : { ok: false, output: '' };
+  const hermesLines = String(hermesVersion.output || '').split('\n');
+  return {
+    openclaw: {
+      installed: isErr(currentRaw) ? '' : String(currentRaw).trim(),
+      latest: update?.availability?.latestVersion || update?.update?.registry?.latestVersion || '',
+      updateAvailable: Boolean(update?.availability?.available),
+      channel: update?.channel?.label || 'stable',
+    },
+    hermes: {
+      installed: hermesLines.find((line) => line.startsWith('Hermes Agent '))?.replace('Hermes Agent ', '') || '',
+      updateAvailable: hermesLines.some((line) => /update available/i.test(line)),
+      updateDetail: hermesLines.find((line) => /update available/i.test(line)) || '',
+    },
+  };
 }
 
 async function getCronJobs(cfg) {
@@ -2344,6 +2510,16 @@ async function performServiceAction(service, action, cfg) {
   }
 
   const container = service;
+  let dockerReady = runShell(`${DOCKER_BIN} info --format '{{.ServerVersion}}'`, 5000).ok;
+  if (!dockerReady && (action === 'start' || action === 'restart')) {
+    runShell('open -a Docker', 5000);
+    for (let attempt = 0; attempt < 24; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      dockerReady = runShell(`${DOCKER_BIN} info --format '{{.ServerVersion}}'`, 5000).ok;
+      if (dockerReady) break;
+    }
+  }
+  if (!dockerReady) return { ok: false, message: 'Docker Engine no está disponible. Abre Docker Desktop y vuelve a intentar.' };
   const result = runShell(`${DOCKER_BIN} ${action} ${container}`);
   if (!result.ok) {
     return { ok: false, message: result.output || `Fallo docker ${action} ${container}` };
@@ -2561,16 +2737,18 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname === '/api/n8n/status' && req.method === 'GET') {
     const n8nPort = 5678;
     let running = false;
+    let status = 0;
     try {
       const check = await new Promise((resolve) => {
-        const req = http.request({ hostname: '127.0.0.1', port: n8nPort, path: '/', method: 'GET' }, (res) => resolve(true));
-        req.on('error', () => resolve(false));
-        req.setTimeout(2000, () => { req.destroy(); resolve(false); });
+        const req = http.request({ hostname: '127.0.0.1', port: n8nPort, path: '/healthz/readiness', method: 'GET' }, (res) => resolve({ running: res.statusCode === 200, status: res.statusCode || 0 }));
+        req.on('error', () => resolve({ running: false, status: 0 }));
+        req.setTimeout(2000, () => { req.destroy(); resolve({ running: false, status: 0 }); });
         req.end();
       });
-      running = check;
+      running = check.running;
+      status = check.status;
     } catch { running = false; }
-    sendJson(res, 200, { ok: true, running, url: `http://127.0.0.1:${n8nPort}` });
+    sendJson(res, 200, { ok: true, running, ready: running, status, containerRunning: dockerIsRunning('n8n'), url: `http://127.0.0.1:${n8nPort}` });
     return;
   }
 
@@ -2588,7 +2766,8 @@ const server = http.createServer(async (req, res) => {
       running = check;
     } catch { running = false; }
     try {
-      version = execSync(`"${OPENCLAW_BIN}" --version 2>/dev/null || echo ""`, { timeout: 3000 }).toString().trim();
+      const versionBin = fs.existsSync(OPENCLAW_UPDATE_BIN) ? OPENCLAW_UPDATE_BIN : OPENCLAW_BIN;
+      version = execSync(`"${versionBin}" --version 2>/dev/null || echo ""`, { timeout: 3000 }).toString().trim();
     } catch {}
     sendJson(res, 200, { ok: true, running, port: openclawPort, version, url: `http://127.0.0.1:${openclawPort}` });
     return;
@@ -2608,7 +2787,55 @@ const server = http.createServer(async (req, res) => {
       if (providerMatch) provider = providerMatch[1];
       memoryEnabled = configContent.includes('memory_enabled: true');
     } catch {}
-    sendJson(res, 200, { ok: true, model, provider, memoryEnabled });
+    const running = Boolean(run('pgrep -f "hermes_cli.main gateway run"') && !isErr(run('pgrep -f "hermes_cli.main gateway run"')));
+    const versionOut = fs.existsSync(HERMES_CLI) ? runShell(`"${HERMES_CLI}" -m hermes_cli.main --version`, 12000) : { ok: false, output: '' };
+    const versionLines = String(versionOut.output || '').split('\n');
+    sendJson(res, 200, {
+      ok: true, running, model, provider, memoryEnabled,
+      version: versionLines.find((line) => line.startsWith('Hermes Agent '))?.replace('Hermes Agent ', '') || '',
+      updateAvailable: versionLines.some((line) => /update available/i.test(line)),
+    });
+    return;
+  }
+
+  if (u.pathname === '/api/services/health' && req.method === 'GET') {
+    const [ha, n8n, openclaw] = await Promise.all([
+      haApi('/api/'),
+      httpProbe('http://127.0.0.1:5678/healthz/readiness'),
+      httpProbe('http://127.0.0.1:18789/status'),
+    ]);
+    const docker = runShell(`${DOCKER_BIN} info --format '{{.ServerVersion}}'`, 5000);
+    sendJson(res, 200, {
+      ok: true,
+      docker: { running: docker.ok, version: docker.ok ? docker.output : '', error: docker.ok ? '' : 'Docker Engine no disponible' },
+      services: {
+        homeassistant: { running: ha.ok, containerRunning: dockerIsRunning('homeassistant'), url: HA_URL, error: ha.ok ? '' : ha.error },
+        n8n: { running: n8n.ok && n8n.status === 200, containerRunning: dockerIsRunning('n8n'), url: 'http://127.0.0.1:5678', status: n8n.status || 0 },
+        openclaw: { running: openclaw.ok, url: 'http://127.0.0.1:18789', status: openclaw.status || 0 },
+        hermes: { running: Boolean(run('pgrep -f "hermes_cli.main gateway run"') && !isErr(run('pgrep -f "hermes_cli.main gateway run"'))) },
+      },
+    });
+    return;
+  }
+
+  if (u.pathname === '/api/agents/activity' && req.method === 'GET') {
+    const [openclawSessions] = await Promise.all([collectOpenClawActivity(8)]);
+    const hermesSessions = collectHermesActivity(8);
+    const memories = collectHermesMemories();
+    const updates = collectAgentUpdates();
+    let neo4jBridgeRunning = false;
+    try {
+      const healthResponse = await fetch('http://127.0.0.1:7575/memory/health', { signal: AbortSignal.timeout(3000) });
+      const healthData = await healthResponse.json();
+      neo4jBridgeRunning = healthResponse.ok && healthData?.neo4j === 'connected';
+    } catch {}
+    sendJson(res, 200, {
+      ok: true,
+      updates,
+      sessions: [...openclawSessions, ...hermesSessions].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)).slice(0, 14),
+      memory: { items: memories, count: memories.length, neo4jBridgeRunning },
+      generatedAt: new Date().toISOString(),
+    });
     return;
   }
 
@@ -3049,7 +3276,8 @@ const server = http.createServer(async (req, res) => {
     try {
       const r = await fetch(`${NEO4J_BRIDGE_URL}/memory/health`, { signal: AbortSignal.timeout(3000) });
       const data = await r.json();
-      sendJson(res, 200, { ok: true, ...data });
+      const healthy = r.ok && !data?.detail && data?.neo4j !== 'error';
+      sendJson(res, 200, { ok: healthy, ...data });
     } catch (e) {
       sendJson(res, 200, { ok: false, error: 'Bridge no disponible', detail: e.message });
     }
@@ -3060,7 +3288,8 @@ const server = http.createServer(async (req, res) => {
     try {
       const r = await fetch(`${NEO4J_BRIDGE_URL}/memory/stats`, { signal: AbortSignal.timeout(5000) });
       const data = await r.json();
-      sendJson(res, 200, { ok: true, ...data });
+      const healthy = r.ok && !data?.detail && !data?.error;
+      sendJson(res, 200, { ok: healthy, ...data });
     } catch (e) {
       sendJson(res, 200, { ok: false, error: 'Bridge no disponible' });
     }
@@ -3401,4 +3630,7 @@ initImanDb(); // init persistent agent/capability graph
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`Monitor UI en http://127.0.0.1:${PORT}`);
+  ensureNeo4jBridge().then((ready) => {
+    if (!ready) console.warn('[WARN] Neo4j memory bridge unavailable');
+  }).catch((error) => console.warn(`[WARN] Neo4j bridge startup failed: ${error.message}`));
 });

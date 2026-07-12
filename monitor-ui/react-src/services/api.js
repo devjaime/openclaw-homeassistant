@@ -84,3 +84,13 @@ export async function fetchHermesStatus() {
   const res = await apiFetch('/hermes/status', { cache: 'no-store' });
   return res.json();
 }
+
+export async function fetchServicesHealth() {
+  const res = await apiFetch('/services/health', { cache: 'no-store' });
+  return res.json();
+}
+
+export async function fetchAgentActivity() {
+  const res = await apiFetch('/agents/activity', { cache: 'no-store' });
+  return res.json();
+}

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { fetchN8nStatus, fetchOpenClawStatus } from '../services/api.js';
+import { fetchServicesHealth } from '../services/api.js';
 
 const SERVICES = [
   { id: 'openclaw', label: 'OpenClaw', url: 'http://127.0.0.1:18789', color: '#3b82f6', description: 'Gateway de agentes AI' },
@@ -10,6 +10,8 @@ const SERVICES = [
 export default function Workroom() {
   const [serviceStatus, setServiceStatus] = useState({});
   const [loading, setLoading] = useState(true);
+  const [action, setAction] = useState('');
+  const [message, setMessage] = useState('');
 
   useEffect(() => {
     loadServiceStatus();
@@ -18,14 +20,11 @@ export default function Workroom() {
   const loadServiceStatus = async () => {
     setLoading(true);
     try {
-      const [n8n, openclaw] = await Promise.all([
-        fetchN8nStatus().catch(() => ({ ok: false, running: false })),
-        fetchOpenClawStatus().catch(() => ({ ok: false, running: false })),
-      ]);
+      const health = await fetchServicesHealth();
       setServiceStatus({
-        openclaw: openclaw.running || false,
-        homeassistant: true,
-        n8n: n8n.running || false,
+        openclaw: health.services?.openclaw?.running || false,
+        homeassistant: health.services?.homeassistant?.running || false,
+        n8n: health.services?.n8n?.running || false,
       });
     } catch (e) {
       console.error(e);
@@ -36,6 +35,21 @@ export default function Workroom() {
 
   const openService = (url) => {
     window.open(url, '_blank');
+  };
+
+  const runServiceAction = async (service, nextAction) => {
+    setAction(`${service}:${nextAction}`);
+    setMessage('');
+    try {
+      const response = await fetch('/api/service-action', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ service, action: nextAction }),
+      });
+      const data = await response.json();
+      setMessage(data.message || (response.ok ? 'Acción completada' : 'No se pudo completar la acción'));
+      await loadServiceStatus();
+    } catch (error) { setMessage(error.message); }
+    finally { setAction(''); }
   };
 
   if (loading) {
@@ -63,6 +77,8 @@ export default function Workroom() {
         </p>
       </div>
 
+      {message ? <div className="iman-message">{message}</div> : null}
+
       <div className="services-grid">
         {SERVICES.map((svc) => (
           <div key={svc.id} className="card service-card" style={{ borderLeft: `4px solid ${svc.color}` }}>
@@ -77,6 +93,9 @@ export default function Workroom() {
             <div className="service-actions">
               <button className="btn-primary" onClick={() => openService(svc.url)}>
                 ↗ Abrir en navegador
+              </button>
+              <button className="btn-refresh" disabled={Boolean(action)} onClick={() => runServiceAction(svc.id, serviceStatus[svc.id] ? 'restart' : 'start')}>
+                {action.startsWith(svc.id) ? 'Procesando…' : serviceStatus[svc.id] ? '↻ Reiniciar' : '▶ Iniciar'}
               </button>
             </div>
           </div>

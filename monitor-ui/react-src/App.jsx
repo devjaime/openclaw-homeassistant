@@ -15,6 +15,7 @@ const Neo4j = lazy(() => import('./components/Neo4j.jsx'));
 const Settings = lazy(() => import('./components/Settings.jsx'));
 const HomeAssistant = lazy(() => import('./components/HomeAssistant.jsx'));
 const Iman = lazy(() => import('./components/Iman.jsx'));
+const AgentActivity = lazy(() => import('./components/AgentActivity.jsx'));
 
 const SECTION_COMPONENTS = {
   dashboard: Dashboard,
@@ -30,6 +31,7 @@ const SECTION_COMPONENTS = {
   settings: Settings,
   homeassistant: HomeAssistant,
   iman: Iman,
+  activity: AgentActivity,
 };
 
 function SectionFallback() {

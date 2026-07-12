@@ -9,6 +9,7 @@ export default function HomeAssistant() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('overview');
   const [error, setError] = useState(null);
+  const [recovering, setRecovering] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -28,6 +29,17 @@ export default function HomeAssistant() {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  const recoverService = async () => {
+    setRecovering(true);
+    try {
+      const response = await fetch('/api/service-action', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ service: 'homeassistant', action: 'restart' }) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'No se pudo reiniciar Home Assistant');
+      await loadData();
+    } catch (e) { setError(e.message); }
+    finally { setRecovering(false); }
+  };
 
   if (loading) {
     return (
@@ -55,7 +67,7 @@ export default function HomeAssistant() {
         </div>
       </header>
 
-      {error && <div className="error-banner">{error}</div>}
+      {error && <div className="error-banner">{error} <button className="btn-refresh" disabled={recovering} onClick={recoverService}>{recovering ? 'Reiniciando…' : 'Reiniciar servicio'}</button></div>}
 
       <div className="dashboard-grid" style={{ marginBottom: 24 }}>
         <div className="card summary-card">

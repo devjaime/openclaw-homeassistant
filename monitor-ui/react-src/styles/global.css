@@ -196,6 +196,43 @@ body {
 .iman-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .iman-recommendation { display: flex; flex-direction: column; gap: 4px; padding: 12px; margin-top: 12px; border-radius: 8px; background: rgba(139,92,246,.1); border: 1px solid rgba(139,92,246,.35); font-size: 12px; color: #c4b5fd; }
 
+/* Agent activity, TUI summaries and memory graph */
+.agent-activity-section { max-width: 1500px; margin: 0 auto; }
+.agent-update-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 16px; }
+.agent-update-card { border-top: 3px solid; }
+.agent-update-card p { color: var(--color-text-subtle); font-size: 12px; margin-top: 5px; }
+.update-version { font-size: 20px; font-weight: 750; margin-top: 16px; }
+.card-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 12px; }
+.card-heading p { color: var(--color-text-subtle); font-size: 12px; margin-top: 3px; }
+.activity-graph-card { overflow: hidden; margin-bottom: 16px; }
+.memory-activity-graph { width: 100%; min-height: 420px; display: block; background: radial-gradient(circle at center, rgba(139,92,246,.08), transparent 38%); }
+.memory-graph-edge { stroke: #41475a; stroke-width: 1.5; }
+.memory-node { fill: #171a24; stroke-width: 2; }
+.memory-node-openclaw { stroke: #6366f1; }
+.memory-node-hermes { stroke: #10b981; }
+.memory-node-memory { stroke: #ec4899; }
+.memory-node-title, .memory-core-title { fill: #f8fafc; font-size: 10px; font-weight: 700; }
+.memory-node-meta, .memory-core-subtitle, .memory-column-label { fill: #94a3b8; font-size: 8px; }
+.memory-column-label { font-weight: 800; letter-spacing: .08em; }
+.tui-card { margin-bottom: 16px; }
+.compact-tabs { margin: 0; border: 0; padding: 0; flex-wrap: wrap; }
+.compact-tabs .tab { font-size: 12px; padding: 6px 10px; }
+.tui-list { display: grid; gap: 10px; }
+.tui-session { border: 1px solid var(--color-border); border-left: 3px solid #6366f1; border-radius: 10px; padding: 13px 15px; background: #141720; }
+.tui-session.tui-hermes { border-left-color: #10b981; }
+.tui-session-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 7px; }
+.tui-source { font-size: 10px; font-weight: 800; letter-spacing: .06em; color: #a5b4fc; }
+.tui-hermes .tui-source { color: #6ee7b7; }
+.tui-session time { color: var(--color-text-subtle); font-size: 10px; }
+.tui-session h4 { font-size: 14px; margin-bottom: 6px; }
+.tui-session p { color: #a1a1aa; font-size: 12px; white-space: pre-wrap; }
+.tui-metrics { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.tui-metrics span { padding: 3px 7px; border-radius: 5px; background: #232735; color: #9ca3af; font-size: 10px; }
+.memory-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin-top: 12px; }
+.memory-summary-grid article { padding: 12px; border: 1px solid rgba(236,72,153,.25); border-radius: 9px; background: rgba(236,72,153,.05); }
+.memory-summary-grid h4 { font-size: 13px; color: #f9a8d4; margin-bottom: 6px; }
+.memory-summary-grid p { color: var(--color-text-subtle); font-size: 11px; }
+
 .btn-danger {
   padding: 10px 20px;
   background: var(--color-destructive);
@@ -661,12 +698,16 @@ body {
   .iman-layout { grid-template-columns: 1fr; }
   .iman-panels { grid-template-columns: 1fr; }
   .iman-graph { min-height: 380px; }
+  .agent-update-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 640px) {
   .iman-canvas-card { overflow-x: auto; }
   .iman-graph { min-width: 820px; }
   .iman-form-grid { grid-template-columns: 1fr; }
+  .memory-activity-graph { min-width: 760px; }
+  .activity-graph-card { overflow-x: auto; }
+  .card-heading { flex-direction: column; }
 }
 
 @media (max-width: 480px) {

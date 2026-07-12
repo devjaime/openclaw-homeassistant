@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { id: 'autonomous', label: 'Autónomo', icon: 'Bot' },
   { id: 'multiagent', label: 'Multi-Agente', icon: 'Network' },
   { id: 'agents', label: 'AI Agents', icon: 'Sparkles' },
+  { id: 'activity', label: 'Actividad IA', icon: 'Activity' },
   { id: 'iman', label: 'Imán', icon: 'Magnet' },
   { id: 'models', label: 'Modelos', icon: 'Cpu' },
   { id: 'programmer', label: 'Programador', icon: 'Code2' },
@@ -112,6 +113,11 @@ function Icon({ name, size = 20 }) {
       <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <path d="M6 15a6 6 0 0 0 12 0V5h-4v10a2 2 0 0 1-4 0V5H6z" />
         <path d="M6 9h4M14 9h4" />
+      </svg>
+    ),
+    Activity: (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M3 12h4l2-7 4 14 2-7h6" />
       </svg>
     ),
   };
