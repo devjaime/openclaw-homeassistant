@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { fetchAgentActivity } from '../services/api.js';
 import LoadingSpinner from './LoadingSpinner.jsx';
+import MemoryGraphExplorer from './MemoryGraphExplorer.jsx';
 
 function formatDate(value) {
   if (!value) return '—';
@@ -16,26 +17,6 @@ function UpdateCard({ name, color, update }) {
       {update?.channel ? <p>Canal: {update.channel}</p> : null}
       {update?.updateDetail ? <p>{update.updateDetail}</p> : null}
     </div>
-  );
-}
-
-function MemoryGraph({ sessions, memories }) {
-  const graph = useMemo(() => {
-    const sessionNodes = sessions.slice(0, 6).map((session, index) => ({ ...session, x: 235, y: 60 + index * 72 }));
-    const memoryNodes = memories.slice(0, 6).map((memory, index) => ({ ...memory, x: 675, y: 60 + index * 72 }));
-    return { sessionNodes, memoryNodes };
-  }, [sessions, memories]);
-
-  return (
-    <svg className="memory-activity-graph" viewBox="0 0 900 500" role="img" aria-label="Grafo de sesiones y memoria persistente">
-      <defs><linearGradient id="memory-core" x1="0" y1="0" x2="1" y2="1"><stop stopColor="#8b5cf6"/><stop offset="1" stopColor="#ec4899"/></linearGradient></defs>
-      {[...graph.sessionNodes, ...graph.memoryNodes].map((node) => <line key={`edge-${node.id}`} x1="450" y1="250" x2={node.x} y2={node.y} className="memory-graph-edge" />)}
-      <circle cx="450" cy="250" r="58" fill="url(#memory-core)" opacity=".9" />
-      <text x="450" y="246" textAnchor="middle" className="memory-core-title">MEMORIA</text><text x="450" y="266" textAnchor="middle" className="memory-core-subtitle">persistente local</text>
-      {graph.sessionNodes.map((node) => <g key={node.id}><rect x={node.x - 130} y={node.y - 24} width="260" height="48" rx="10" className={`memory-node memory-node-${node.source}`} /><text x={node.x} y={node.y - 3} textAnchor="middle" className="memory-node-title">{node.source === 'hermes' ? '🧠' : '⚡'} {node.title.slice(0, 34)}</text><text x={node.x} y={node.y + 14} textAnchor="middle" className="memory-node-meta">{node.messageCount} msgs · {node.toolCount} tools</text></g>)}
-      {graph.memoryNodes.map((node) => <g key={node.id}><rect x={node.x - 130} y={node.y - 24} width="260" height="48" rx="10" className="memory-node memory-node-memory" /><text x={node.x} y={node.y + 4} textAnchor="middle" className="memory-node-title">◆ {node.title.slice(0, 36)}</text></g>)}
-      <text x="235" y="490" textAnchor="middle" className="memory-column-label">ÚLTIMAS TUI / SESIONES</text><text x="675" y="490" textAnchor="middle" className="memory-column-label">MEMORIA HERMES</text>
-    </svg>
   );
 }
 
@@ -63,7 +44,7 @@ export default function AgentActivity() {
 
       <div className="agent-update-grid"><UpdateCard name="⚡ OpenClaw" color="#6366f1" update={data?.updates?.openclaw} /><UpdateCard name="🧠 Hermes Agent" color="#10b981" update={data?.updates?.hermes} /></div>
 
-      <div className="card activity-graph-card"><div className="card-heading"><div><h3>Mapa de memoria y actividad</h3><p>El núcleo conecta sesiones recientes con conocimiento persistente local.</p></div><span className={`status-badge status-${data?.memory?.neo4jBridgeRunning ? 'ok' : 'warn'}`}>Neo4j bridge {data?.memory?.neo4jBridgeRunning ? 'online' : 'degradado'}</span></div><MemoryGraph sessions={data?.sessions || []} memories={data?.memory?.items || []} /></div>
+      <div className="card activity-graph-card"><div className="card-heading"><div><h3>Grafo de conocimiento</h3><p>Relaciones reales entre plataformas, sesiones, modelos, herramientas y memoria.</p></div><span className={`status-badge status-${data?.memory?.neo4jBridgeRunning ? 'ok' : 'warn'}`}>Neo4j bridge {data?.memory?.neo4jBridgeRunning ? 'online' : 'degradado'}</span></div><MemoryGraphExplorer graph={data?.graph} /></div>
 
       <div className="card tui-card">
         <div className="card-heading"><div><h3>TUI resumidas e iteraciones recientes</h3><p>Conversaciones locales resumidas sin mostrar razonamiento interno.</p></div><div className="tabs compact-tabs"><button className={`tab ${filter === 'all' ? 'active' : ''}`} onClick={() => setFilter('all')}>Todas</button><button className={`tab ${filter === 'openclaw' ? 'active' : ''}`} onClick={() => setFilter('openclaw')}>OpenClaw</button><button className={`tab ${filter === 'hermes' ? 'active' : ''}`} onClick={() => setFilter('hermes')}>Hermes</button></div></div>

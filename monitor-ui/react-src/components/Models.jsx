@@ -5,6 +5,8 @@ import LoadingSpinner from './LoadingSpinner.jsx';
 export default function Models() {
   const [cloudModels, setCloudModels] = useState([]);
   const [localModels, setLocalModels] = useState([]);
+  const [localStatus, setLocalStatus] = useState(null);
+  const [providers, setProviders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('cloud');
 
@@ -20,10 +22,12 @@ export default function Models() {
         fetchModelsLocal().catch(() => ({ ok: false, models: [] })),
       ]);
       if (capRes?.ok) {
-        setCloudModels(capRes.models?.filter(m => !m.isCloud) || []);
+        setCloudModels(capRes.models?.filter(m => m.isCloud) || []);
+        setProviders(capRes.providers || []);
       }
       if (localRes?.ok) {
         setLocalModels(localRes.models || []);
+        setLocalStatus(localRes);
       }
     } catch (e) {
       console.error(e);
@@ -54,6 +58,12 @@ export default function Models() {
         </button>
       </div>
 
+      <div className="model-overview-grid">
+        <div className="card"><span className="metric-label">Proveedores configurados</span><strong>{providers.length}</strong><p>{providers.join(' · ') || '—'}</p></div>
+        <div className="card"><span className="metric-label">Modelos remotos</span><strong>{cloudModels.length}</strong><p>{cloudModels.filter((model) => model.active).length} activos</p></div>
+        <div className="card"><span className="metric-label">Motor local</span><strong>{localStatus?.ollamaRunning ? 'ONLINE' : 'OFFLINE'}</strong><p>Ollama · {localStatus?.hardware?.cpuBrand || 'hardware local'}</p></div>
+      </div>
+
       {activeTab === 'cloud' && (
         <div className="dashboard-grid">
           {cloudModels.length === 0 ? (
@@ -64,8 +74,9 @@ export default function Models() {
             <div key={`cloud-${i}`} className="card model-card">
               <div className="model-header">
                 <h3>{model.name || model.id}</h3>
-                {model.badge && <span className="model-badge">{model.badge}</span>}
+                <div className="model-header-badges">{model.active ? <span className="status-badge status-ok">ACTIVO</span> : null}{model.fallback ? <span className="status-badge status-warn">FALLBACK</span> : null}{model.badge && <span className="model-badge">{model.badge}</span>}</div>
               </div>
+              <p className="model-provider">{model.provider} · {model.api || 'API remota'}</p>
               {model.description && (
                 <p className="model-desc">{model.description}</p>
               )}
@@ -91,6 +102,10 @@ export default function Models() {
               )}
               <div className="model-meta">
                 {model.caps && <span className="meta-item">Caps: {model.caps.join(', ')}</span>}
+                {model.contextWindow > 0 ? <span className="meta-item">Contexto: {model.contextWindow.toLocaleString()} tokens</span> : null}
+                {model.maxTokens > 0 ? <span className="meta-item">Salida: {model.maxTokens.toLocaleString()}</span> : null}
+                {model.reasoning ? <span className="meta-item">Razonamiento</span> : null}
+                {model.input?.includes('image') ? <span className="meta-item">Visión</span> : null}
               </div>
             </div>
           ))}
@@ -98,7 +113,9 @@ export default function Models() {
       )}
 
       {activeTab === 'local' && (
-        <div className="dashboard-grid">
+        <div>
+          {localStatus?.diagnostic ? <div className="model-diagnostic"><strong>{localStatus.ollamaRunning ? 'Ollama' : 'Motor local no disponible'}</strong><span>{localStatus.diagnostic}</span>{localStatus.storage?.external ? <code>{localStatus.storage.target}</code> : null}</div> : null}
+          <div className="dashboard-grid">
           {localModels.length === 0 ? (
             <div className="card">
               <p className="empty-state">No hay modelos locales disponibles</p>
@@ -135,6 +152,7 @@ export default function Models() {
               )}
             </div>
           ))}
+          </div>
         </div>
       )}
     </div>

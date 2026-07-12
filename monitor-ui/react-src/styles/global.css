@@ -232,6 +232,30 @@ body {
 .memory-summary-grid article { padding: 12px; border: 1px solid rgba(236,72,153,.25); border-radius: 9px; background: rgba(236,72,153,.05); }
 .memory-summary-grid h4 { font-size: 13px; color: #f9a8d4; margin-bottom: 6px; }
 .memory-summary-grid p { color: var(--color-text-subtle); font-size: 11px; }
+.obsidian-graph-shell { border: 1px solid #2d3242; border-radius: 11px; overflow: hidden; background: #0d1018; }
+.obsidian-toolbar { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 10px; border-bottom: 1px solid #252938; background: #151823; }
+.graph-filters { display: flex; flex-wrap: wrap; gap: 5px; }
+.graph-filters button, .graph-reset { display: flex; align-items: center; gap: 5px; padding: 5px 8px; border: 1px solid #303545; border-radius: 6px; background: #1d2130; color: #cbd5e1; cursor: pointer; font-size: 10px; }
+.graph-filters button.muted { opacity: .35; }
+.graph-filters i { width: 7px; height: 7px; border-radius: 50%; }
+.obsidian-canvas-wrap { position: relative; height: 620px; overflow: hidden; background-image: radial-gradient(circle at 50% 45%, rgba(99,102,241,.08), transparent 42%), radial-gradient(rgba(100,116,139,.16) .7px, transparent .7px); background-size: auto, 18px 18px; }
+.obsidian-canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+.graph-node-detail { position: absolute; top: 14px; right: 14px; width: min(300px, calc(100% - 28px)); padding: 13px; border: 1px solid #3a4052; border-radius: 9px; background: rgba(19,22,32,.95); box-shadow: 0 12px 35px rgba(0,0,0,.35); backdrop-filter: blur(8px); }
+.graph-node-detail > span { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+.graph-node-detail h4 { margin: 5px 0 7px; font-size: 13px; }
+.graph-node-detail p { color: #a1a1aa; font-size: 11px; white-space: pre-wrap; max-height: 150px; overflow: auto; }
+.graph-node-detail time { display: block; color: #71717a; font-size: 9px; margin-top: 7px; }
+.graph-node-detail button { margin-top: 9px; border: 0; background: transparent; color: #60a5fa; cursor: pointer; font-size: 10px; }
+.graph-help { position: absolute; left: 12px; bottom: 10px; padding: 5px 8px; border-radius: 5px; background: rgba(15,17,23,.75); color: #71717a; font-size: 9px; pointer-events: none; }
+.model-overview-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.model-overview-grid .card { display: flex; flex-direction: column; gap: 5px; }
+.model-overview-grid strong { font-size: 20px; }
+.model-overview-grid p { font-size: 11px; color: var(--color-text-subtle); word-break: break-word; }
+.model-header-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+.model-meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+.model-meta .meta-item { padding: 3px 7px; border-radius: 5px; background: #272b38; color: #a1a1aa; font-size: 10px; }
+.model-diagnostic { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 13px 15px; margin-bottom: 14px; border: 1px solid rgba(245,158,11,.35); border-radius: 9px; background: rgba(245,158,11,.08); color: #fcd34d; font-size: 12px; }
+.model-diagnostic code { color: #fbbf24; background: #171a24; padding: 3px 6px; border-radius: 4px; }
 
 .btn-danger {
   padding: 10px 20px;
@@ -699,6 +723,7 @@ body {
   .iman-panels { grid-template-columns: 1fr; }
   .iman-graph { min-height: 380px; }
   .agent-update-grid { grid-template-columns: 1fr; }
+  .model-overview-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 640px) {
@@ -708,6 +733,7 @@ body {
   .memory-activity-graph { min-width: 760px; }
   .activity-graph-card { overflow-x: auto; }
   .card-heading { flex-direction: column; }
+  .obsidian-canvas-wrap { height: 500px; }
 }
 
 @media (max-width: 480px) {

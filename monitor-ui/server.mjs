@@ -2829,11 +2829,41 @@ const server = http.createServer(async (req, res) => {
       const healthData = await healthResponse.json();
       neo4jBridgeRunning = healthResponse.ok && healthData?.neo4j === 'connected';
     } catch {}
+    const allSessions = [...openclawSessions, ...hermesSessions]
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)).slice(0, 14);
+    const graphNodes = new Map();
+    const graphEdges = [];
+    const addNode = (node) => { if (!graphNodes.has(node.id)) graphNodes.set(node.id, node); };
+    const addEdge = (source, target, relation) => graphEdges.push({ id: `${source}:${relation}:${target}`, source, target, relation });
+    addNode({ id: 'platform-openclaw', type: 'platform', label: 'OpenClaw', detail: updates.openclaw.installed });
+    addNode({ id: 'platform-hermes', type: 'platform', label: 'Hermes', detail: updates.hermes.installed });
+    addNode({ id: 'memory-neo4j', type: 'database', label: 'Neo4j Memory', detail: neo4jBridgeRunning ? 'Conectado' : 'Degradado' });
+    for (const session of allSessions) {
+      const sessionId = `session-${session.source}-${session.id}`;
+      addNode({ id: sessionId, type: 'session', label: session.title.slice(0, 54), detail: session.summary, source: session.source, updatedAt: session.updatedAt });
+      addEdge(`platform-${session.source}`, sessionId, 'session');
+      if (session.model) {
+        const modelId = `model-${session.model.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+        addNode({ id: modelId, type: 'model', label: session.model, detail: 'Modelo utilizado' });
+        addEdge(sessionId, modelId, 'uses_model');
+      }
+      for (const tool of (session.tools || [])) {
+        const toolId = `tool-${tool.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+        addNode({ id: toolId, type: 'tool', label: tool, detail: 'Herramienta utilizada' });
+        addEdge(sessionId, toolId, 'used_tool');
+      }
+    }
+    for (const memory of memories) {
+      addNode({ id: memory.id, type: 'memory', label: memory.title, detail: memory.summary });
+      addEdge('platform-hermes', memory.id, 'remembers');
+      addEdge(memory.id, 'memory-neo4j', 'indexed_in');
+    }
     sendJson(res, 200, {
       ok: true,
       updates,
-      sessions: [...openclawSessions, ...hermesSessions].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)).slice(0, 14),
+      sessions: allSessions,
       memory: { items: memories, count: memories.length, neo4jBridgeRunning },
+      graph: { nodes: [...graphNodes.values()], edges: graphEdges },
       generatedAt: new Date().toISOString(),
     });
     return;
@@ -3359,30 +3389,63 @@ const server = http.createServer(async (req, res) => {
 
   // ── Model capabilities + skill matching ──────────────────────────────────────
   if (u.pathname === '/api/models/capabilities' && req.method === 'GET') {
-    const tagsData = await fetchOllamaJson('/api/tags');
+    const cfg = await readOpenClawConfig();
     const skills = readClaudeSkills();
-    const models = (tagsData?.models || []).map((m) => {
-      const caps = getModelCapabilities(m.name);
-      // Match skills: skill is relevant if any skill tag matches model caps OR skill id is in bestFor
-      const matchedSkills = skills.filter((s) => {
-        if (caps.bestFor.includes(s.id)) return true;
-        return s.tags.some((t) => caps.caps.includes(t));
-      }).map((s) => ({ id: s.id, name: s.name, description: s.description.slice(0, 80) }));
-      return {
-        name: m.name,
-        family: m.details?.family || '',
-        parameterSize: m.details?.parameter_size || '',
-        quantization: m.details?.quantization_level || '',
-        sizeGb: parseFloat((m.size / 1_073_741_824).toFixed(2)),
-        caps: caps.caps,
-        badge: caps.badge,
-        description: caps.description,
-        strengths: caps.strengths,
-        matchedSkills,
-        isCloud: m.name.includes(':cloud') || m.size === 0,
-      };
-    });
-    sendJson(res, 200, { ok: true, models, skills });
+    const primary = String(cfg?.agents?.defaults?.model?.primary || '');
+    const fallbacks = Array.isArray(cfg?.agents?.defaults?.model?.fallbacks) ? cfg.agents.defaults.model.fallbacks : [];
+    const providers = cfg?.models?.providers || {};
+    const models = [];
+    for (const [provider, providerConfig] of Object.entries(providers)) {
+      for (const configured of (providerConfig?.models || [])) {
+        const fullId = `${provider}/${configured.id}`;
+        const caps = getModelCapabilities(configured.id);
+        const matchedSkills = skills.filter((skill) => caps.bestFor.includes(skill.id) || skill.tags.some((tag) => caps.caps.includes(tag)))
+          .map((skill) => ({ id: skill.id, name: skill.name, description: skill.description.slice(0, 80) }));
+        models.push({
+          id: fullId,
+          name: configured.name || configured.id,
+          provider,
+          api: configured.api || providerConfig.api || '',
+          reasoning: Boolean(configured.reasoning),
+          input: configured.input || ['text'],
+          contextWindow: Number(configured.contextWindow || 0),
+          maxTokens: Number(configured.maxTokens || 0),
+          cost: configured.cost || {},
+          caps: caps.caps,
+          badge: caps.badge,
+          description: caps.description,
+          strengths: caps.strengths,
+          matchedSkills,
+          active: fullId === primary,
+          fallback: fallbacks.includes(fullId),
+          isCloud: provider !== 'ollama' && !String(providerConfig.baseUrl || '').includes('127.0.0.1'),
+        });
+      }
+    }
+    if (primary && !models.some((model) => model.id === primary)) {
+      const [provider, ...modelParts] = primary.split('/');
+      const modelId = modelParts.join('/');
+      const caps = getModelCapabilities(modelId);
+      models.unshift({
+        id: primary, name: modelId || primary, provider, api: providers?.[provider]?.api || '',
+        reasoning: true, input: ['text'], contextWindow: 0, maxTokens: 0, cost: {},
+        caps: caps.caps, badge: caps.badge, description: caps.description, strengths: caps.strengths,
+        matchedSkills: [], active: true, fallback: false,
+        isCloud: provider !== 'ollama',
+      });
+    }
+    const hermesConfigPath = path.join(HERMES_HOME, 'config.yaml');
+    try {
+      const hermesConfig = fs.readFileSync(hermesConfigPath, 'utf8');
+      const defaultModel = hermesConfig.match(/^model:\s*\n\s+default:\s*(.+)$/m)?.[1]?.trim();
+      const provider = hermesConfig.match(/^model:\s*\n(?:.*\n){0,3}?\s+provider:\s*(.+)$/m)?.[1]?.trim() || 'hermes';
+      const id = `hermes/${provider}/${defaultModel}`;
+      if (defaultModel && !models.some((model) => model.id === id)) {
+        const caps = getModelCapabilities(defaultModel);
+        models.push({ id, name: `${defaultModel} (Hermes)`, provider: `Hermes · ${provider}`, api: 'hermes-agent', reasoning: true, input: ['text'], contextWindow: 0, maxTokens: 0, cost: {}, caps: caps.caps, badge: caps.badge, description: caps.description, strengths: caps.strengths, matchedSkills: [], active: true, fallback: false, isCloud: true });
+      }
+    } catch {}
+    sendJson(res, 200, { ok: true, models, skills, primary, fallbacks, providers: Object.keys(providers) });
     return;
   }
 
@@ -3393,6 +3456,15 @@ const server = http.createServer(async (req, res) => {
       fetchOllamaJson('/api/ps'),
     ]);
     const ollamaRunning = tagsData !== null;
+    const ollamaModelsPath = path.join(process.env.HOME || '', '.ollama', 'models');
+    let storage = { path: ollamaModelsPath, available: fs.existsSync(ollamaModelsPath), external: false, target: '' };
+    try {
+      if (fs.lstatSync(ollamaModelsPath).isSymbolicLink()) {
+        storage.external = true;
+        storage.target = fs.readlinkSync(ollamaModelsPath);
+        storage.available = fs.existsSync(ollamaModelsPath);
+      }
+    } catch {}
     const installedModels = (tagsData?.models || []).map((m) => {
       const sizeGb = parseFloat((m.size / 1_073_741_824).toFixed(2));
       const ramReq = modelRamRequirementGb(m.name);
@@ -3444,6 +3516,10 @@ const server = http.createServer(async (req, res) => {
       ollamaDiskUsed: ollamaDiskGb,
       models: modelsWithCompat,
       runningModels,
+      storage,
+      diagnostic: !storage.available && storage.external
+        ? `El volumen externo de modelos no está disponible: ${storage.target}`
+        : !ollamaRunning ? 'Ollama está instalado pero no está ejecutándose' : installedModels.length === 0 ? 'Ollama está operativo, sin modelos descargados' : '',
     });
     return;
   }

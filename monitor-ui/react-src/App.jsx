@@ -1,4 +1,4 @@
-import React, { useState, lazy, Suspense } from 'react';
+import React, { useEffect, useState, lazy, Suspense } from 'react';
 import Sidebar from './components/Sidebar.jsx';
 import LoadingSpinner from './components/LoadingSpinner.jsx';
 
@@ -43,15 +43,28 @@ function SectionFallback() {
 }
 
 export default function App() {
-  const [activeSection, setActiveSection] = useState('dashboard');
+  const [activeSection, setActiveSection] = useState(() => {
+    const requested = window.location.hash.replace(/^#/, '');
+    return SECTION_COMPONENTS[requested] ? requested : 'dashboard';
+  });
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const ActiveSection = SECTION_COMPONENTS[activeSection];
 
   const handleNavigate = (sectionId) => {
     setActiveSection(sectionId);
+    window.history.replaceState(null, '', `#${sectionId}`);
     setSidebarOpen(false);
   };
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      const requested = window.location.hash.replace(/^#/, '');
+      if (SECTION_COMPONENTS[requested]) setActiveSection(requested);
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
 
   return (
     <div className="app-shell">
