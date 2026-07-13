@@ -158,7 +158,7 @@ const LONKO_SYSTEM = {
     { priority: 'P3', title: 'Marca y activos propios', value: 'Convertir aprendizajes de IA local, Go, RAG y MCP en contenido y productos.', deliverable: 'Un repositorio, artículo o skill terminado' },
     { priority: 'P1', title: 'Sostenibilidad', value: 'Ajustar la carga a energía, familia y responsabilidades; evitar dispersión.', deliverable: '1 principal + 1 experimento + 1 contenido' },
   ],
-  limits: ['2 agentes paralelos como máximo', '1 modelo pesado cargado', 'Qwen 3.5 4B · contexto 4K', 'local por defecto', 'Nivel 3 requiere aprobación', 'finanzas y publicaciones nunca automáticas'],
+  limits: ['2 agentes paralelos como máximo', '1 modelo pesado cargado', 'Qwen 3.5 4B · contexto OpenClaw 16K', 'local por defecto', 'Nivel 3 requiere aprobación', 'finanzas y publicaciones nunca automáticas'],
 };
 
 function CaseCard({ case: c, platformColor }) {
@@ -219,16 +219,22 @@ export default function Agents() {
   });
   const [hermesStatus, setHermesStatus] = useState(null);
   const [openclawStatus, setOpenclawStatus] = useState(null);
+  const [runtimeAgents, setRuntimeAgents] = useState([]);
+  const [runtimeSessions, setRuntimeSessions] = useState([]);
 
   useEffect(() => {
     async function fetchStatuses() {
       try {
-        const [oc, hm] = await Promise.all([
+        const [oc, hm, agentData, sessionData] = await Promise.all([
           fetchOpenClawStatus(),
-          fetchHermesStatus().catch(() => null)
+          fetchHermesStatus().catch(() => null),
+          fetch('/api/multiagent/agents', { cache: 'no-store' }).then((response) => response.json()).catch(() => ({ agents: [] })),
+          fetch('/api/multiagent/sessions?limit=50', { cache: 'no-store' }).then((response) => response.json()).catch(() => ({ sessions: [] })),
         ]);
         setOpenclawStatus(oc);
         setHermesStatus(hm);
+        setRuntimeAgents(agentData.agents || []);
+        setRuntimeSessions(sessionData.sessions || []);
       } catch (e) {
         console.error(e);
       }
@@ -344,11 +350,12 @@ export default function Agents() {
   const renderPotential = () => (
     <div className="lonko-potential">
       <section className="card lonko-hero">
-        <div><span className="metric-label">Sistema personal propuesto</span><h2>LONKO · capacidad coordinada</h2><p>{LONKO_SYSTEM.mission}</p></div>
-        <div className="lonko-resource-summary">{LONKO_SYSTEM.limits.map((limit) => <span key={limit}>{limit}</span>)}</div>
+        <div><span className="metric-label">Sistema personal operativo</span><h2>LONKO · capacidad coordinada</h2><p>{LONKO_SYSTEM.mission}</p></div>
+        <div><div className="lonko-live-summary"><span className={`status-badge status-${runtimeAgents.filter((agent) => LONKO_SYSTEM.agents.some((item) => item.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase() === agent.id)).length === 8 ? 'ok' : 'warn'}`}>{runtimeAgents.filter((agent) => agent.id !== 'main').length}/8 CONFIGURADOS</span><strong>OpenClaw {openclawStatus?.running ? 'online' : 'offline'} · Ollama local</strong></div><div className="lonko-resource-summary">{LONKO_SYSTEM.limits.map((limit) => <span key={limit}>{limit}</span>)}</div></div>
       </section>
       <div className="potential-heading"><div><h3>Equipo especializado</h3><p>Cada agente tiene un dominio, un límite y resultados esperados.</p></div><span>8 roles · autonomía controlada</span></div>
-      <div className="lonko-agent-grid">{LONKO_SYSTEM.agents.map((agent) => <article key={agent.name} className="card lonko-agent" style={{ '--agent-color': agent.color }}><strong>{agent.name}</strong><h4>{agent.role}</h4><ul>{agent.outcomes.map((outcome) => <li key={outcome}>{outcome}</li>)}</ul></article>)}</div>
+      <div className="lonko-agent-grid">{LONKO_SYSTEM.agents.map((agent) => { const id = agent.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase(); const live = runtimeAgents.find((item) => item.id === id); const sessions = runtimeSessions.filter((session) => session.agentId === id); return <article key={agent.name} className={`card lonko-agent ${live ? 'agent-configured' : ''}`} style={{ '--agent-color': agent.color }}><div className="lonko-agent-status"><strong>{agent.name}</strong><span className={`status-badge status-${live ? 'ok' : 'warn'}`}>{live ? 'CONFIGURADO' : 'PENDIENTE'}</span></div><h4>{agent.role}</h4><ul>{agent.outcomes.map((outcome) => <li key={outcome}>{outcome}</li>)}</ul><footer><span>{live?.model || 'Sin modelo'}</span><span>{sessions.length} sesiones</span></footer></article>; })}</div>
+      <div className="lonko-runtime-note"><strong>Estado real</strong><span>Los perfiles existen en OpenClaw con workspace, memoria, sesiones y políticas independientes. La ejecución se realiza bajo demanda desde Multi-Agente; no son procesos permanentes.</span><button className="btn-primary" onClick={() => { window.location.hash = 'multiagent'; }}>Abrir consola Multi-Agente</button></div>
       <div className="potential-heading"><div><h3>Potencial aplicado a tus características</h3><p>Software + datos + procesos financieros + conocimiento empresarial + IA.</p></div><span>prioridad antes que volumen</span></div>
       <div className="potential-grid">{LONKO_SYSTEM.opportunities.map((item) => <article key={item.title} className="card potential-card"><div><span className={`priority-badge priority-${item.priority.toLowerCase()}`}>{item.priority}</span><h4>{item.title}</h4></div><p>{item.value}</p><small>Entregable</small><strong>{item.deliverable}</strong></article>)}</div>
       <section className="card operating-loop"><h3>Ciclo operativo seguro</h3><div><span><b>1</b> Observar</span><span><b>2</b> Priorizar</span><span><b>3</b> Delegar</span><span><b>4</b> Ejecutar</span><span><b>5</b> Verificar</span><span><b>6</b> Consolidar</span></div><p>Una tarea solo termina cuando existe archivo, prueba, commit, cálculo, reporte o checklist verificable.</p></section>

@@ -14,7 +14,8 @@ export default function Multiagent() {
   const [loading, setLoading] = useState(true);
   const [spawning, setSpawning] = useState(false);
   const [spawnTask, setSpawnTask] = useState('');
-  const [selectedAgent, setSelectedAgent] = useState('main');
+  const [selectedAgent, setSelectedAgent] = useState('auto');
+  const [spawnNotice, setSpawnNotice] = useState('');
   const [activeTab, setActiveTab] = useState('agents');
 
   const loadData = useCallback(async () => {
@@ -48,8 +49,11 @@ export default function Multiagent() {
       });
       const data = await res.json();
       if (data.ok) {
+        setSpawnNotice(`${data.message} · ${data.model || ''} · ${data.response || data.sessionId}`);
         setSpawnTask('');
-        setTimeout(loadData, 2000);
+        loadData();
+      } else {
+        setSpawnNotice(data.message || 'La ejecución falló');
       }
     } finally {
       setSpawning(false);
@@ -95,7 +99,7 @@ export default function Multiagent() {
       {activeTab === 'agents' && (
         <div className="dashboard-grid">
           <div className="card">
-            <h3>Agentes Activos</h3>
+            <h3>Perfiles OpenClaw reales</h3>
             {agents.length === 0 ? (
               <p className="empty-state">Sin agentes activos</p>
             ) : (
@@ -103,14 +107,16 @@ export default function Multiagent() {
                 {agents.map((agent, i) => (
                   <li key={i} className="data-item">
                     <div className="item-main">
-                      <span className="item-title">{agent.id || agent.name || 'Unknown'}</span>
-                      <span className={`status-badge status-${agent.status === 'running' ? 'ok' : 'warn'}`}>
-                        {agent.status || 'unknown'}
+                      <span className="item-title">{agent.identityEmoji || '🤖'} {agent.identityName || agent.id || agent.name || 'Unknown'}</span>
+                      <span className={`status-badge status-${agent.workspaceReady && agent.memoryReady ? 'ok' : 'warn'}`}>
+                        {agent.workspaceReady && agent.memoryReady ? 'LISTO' : 'INCOMPLETO'}
                       </span>
                     </div>
                     {agent.description && <p className="item-desc">{agent.description}</p>}
                     <div className="item-meta">
-                      {agent.model && <span>Model: {agent.model}</span>}
+                      {agent.model && <span>Modelo: {agent.model}</span>}
+                      <span>Memoria: {agent.memoryReady ? 'sí' : 'no'}</span>
+                      <span>Sesiones: {agent.sessionsCount || 0}</span>
                       {agent.bindings?.length > 0 && <span>Bindings: {agent.bindings.length}</span>}
                     </div>
                   </li>
@@ -124,10 +130,10 @@ export default function Multiagent() {
             <div className="form-group">
               <label>Agente</label>
               <select value={selectedAgent} onChange={(e) => setSelectedAgent(e.target.value)}>
-                {agents.map((a) => (
+                <option value="auto">🧭 Automático por tipo de tarea</option>
+                {agents.filter((a) => a.id !== 'main').map((a) => (
                   <option key={a.id || a.name} value={a.id || a.name}>{a.id || a.name}</option>
                 ))}
-                <option value="main">main</option>
               </select>
             </div>
             <div className="form-group">
@@ -142,6 +148,7 @@ export default function Multiagent() {
             <button className="btn-primary" onClick={handleSpawn} disabled={spawning || !spawnTask.trim()}>
               {spawning ? 'Lanzando...' : '🚀 Lanzar Agente'}
             </button>
+            {spawnNotice ? <p className="form-help spawn-notice">{spawnNotice}</p> : null}
           </div>
         </div>
       )}

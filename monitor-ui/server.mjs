@@ -3199,11 +3199,21 @@ const server = http.createServer(async (req, res) => {
 
   // ── Multi-Agent: agents, sessions, subagents, spawn ──────────────────────────
   if (u.pathname === '/api/multiagent/agents' && req.method === 'GET') {
-    const out = runShell(`"${OPENCLAW_BIN}" agents list --json`, 10000);
+    const openclawCli = fs.existsSync(OPENCLAW_UPDATE_BIN) ? OPENCLAW_UPDATE_BIN : OPENCLAW_BIN;
+    const out = runShell(`"${openclawCli}" agents list --json`, 10000);
     const agents = safeJsonParse(out.output, []);
-    const b = runShell(`"${OPENCLAW_BIN}" agents bindings --json`, 8000);
+    const enrichedAgents = (Array.isArray(agents) ? agents : []).map((agent) => ({
+      ...agent,
+      configured: true,
+      workspaceReady: Boolean(agent.workspace && fs.existsSync(agent.workspace)),
+      memoryReady: Boolean(agent.workspace && fs.existsSync(path.join(agent.workspace, 'MEMORY.md'))),
+      sessionsCount: (() => {
+        try { return fs.readdirSync(path.join(agent.agentDir || '', '..', 'sessions')).filter((file) => file.endsWith('.jsonl') && !file.endsWith('.trajectory.jsonl')).length; } catch { return 0; }
+      })(),
+    }));
+    const b = runShell(`"${openclawCli}" agents bindings --json`, 8000);
     const bindings = safeJsonParse(b.output, []);
-    sendJson(res, 200, { ok: true, agents: Array.isArray(agents) ? agents : [], bindings: Array.isArray(bindings) ? bindings : [] });
+    sendJson(res, 200, { ok: true, agents: enrichedAgents, bindings: Array.isArray(bindings) ? bindings : [] });
     return;
   }
 
@@ -3253,18 +3263,47 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname === '/api/multiagent/spawn' && req.method === 'POST') {
     const body = await readJsonBody(req);
     const task = String(body?.task || '').trim();
-    const agentId = String(body?.agentId || 'main').trim();
+    const requestedAgent = String(body?.agentId || 'auto').trim();
     const model = String(body?.model || '').trim();
-    const thinking = String(body?.thinking || 'low').trim();
+    const requestedThinking = String(body?.thinking || 'off').trim();
     if (!task) { sendJson(res, 400, { ok: false, message: 'task requerido' }); return; }
+    const roleRules = [
+      { id: 'weichafe', pattern: /audita|revisa|riesgo|seguridad|privacidad|verifica|calidad/i },
+      { id: 'pillan', pattern: /código|codigo|programa|backend|arquitectura|debug|test|base de datos|IA|MCP|RAG/i },
+      { id: 'kimun', pattern: /memoria|conocimiento|resume|relaciona|documentos|decisión|decision/i },
+      { id: 'antu', pattern: /carrera|currículum|curriculum|CV|LinkedIn|inglés|ingles|certificación|entrevista/i },
+      { id: 'ruka', pattern: /finanzas|deuda|ahorro|presupuesto|patrimonio|ingreso|gasto/i },
+      { id: 'kume', pattern: /salud|energía|energia|cansancio|estrés|estres|descanso|sueño/i },
+      { id: 'werken', pattern: /blog|artículo|articulo|contenido|marca|publicación|publicacion|comunicación/i },
+    ];
+    const agentId = requestedAgent === 'auto' ? (roleRules.find((rule) => rule.pattern.test(task))?.id || 'lonko') : requestedAgent;
+    const allowedAgents = new Set(['lonko', 'kimun', 'pillan', 'antu', 'ruka', 'kume', 'werken', 'weichafe']);
+    if (!allowedAgents.has(agentId)) { sendJson(res, 400, { ok: false, message: 'Agente no autorizado' }); return; }
+    const thinking = ['off', 'minimal', 'low', 'medium'].includes(requestedThinking) ? requestedThinking : 'off';
     const sessionId = `spawn_${Date.now()}`;
-    const modelFlag = model ? `--model "${model}"` : '';
+    const modelFlag = model === 'ollama/qwen3.5:4b' ? `--model "${model}"` : '';
     const thinkingFlag = `--thinking ${thinking}`;
-    const cmd = `"${OPENCLAW_BIN}" agent --agent ${agentId} --session-id ${sessionId} --message "$SPAWN_TASK" ${modelFlag} ${thinkingFlag} --json`;
-    runShellAsync(cmd, { ...buildSafeEnv(), SPAWN_TASK: task }, 300000)
-      .then((out) => console.log(`[spawn] session=${sessionId} ok=${out.ok}`))
-      .catch((e) => console.error(`[spawn] session=${sessionId}`, e.message));
-    sendJson(res, 202, { ok: true, sessionId, agentId, pending: true, message: 'Sub-agente lanzado' });
+    const openclawCli = fs.existsSync(OPENCLAW_UPDATE_BIN) ? OPENCLAW_UPDATE_BIN : OPENCLAW_BIN;
+    const cmd = `"${openclawCli}" agent --agent ${agentId} --session-id ${sessionId} --message "$SPAWN_TASK" ${modelFlag} ${thinkingFlag} --json`;
+    const out = await runShellAsync(cmd, { ...buildSafeEnv(), SPAWN_TASK: task }, 300000);
+    if (!out.ok) {
+      console.error(`[spawn] session=${sessionId} agent=${agentId} failed: ${out.output.slice(0, 800)}`);
+      sendJson(res, 500, { ok: false, sessionId, agentId, pending: false, message: 'El agente no pudo completar la tarea', error: out.output.slice(0, 1200) });
+      return;
+    }
+    const result = safeJsonParse(out.output, {});
+    const responseText = result?.result?.payloads?.map((payload) => payload?.text).filter(Boolean).join('\n') || '';
+    sendJson(res, 200, {
+      ok: true,
+      sessionId,
+      agentId,
+      selectedAutomatically: requestedAgent === 'auto',
+      pending: false,
+      message: `Tarea completada por ${agentId.toUpperCase()}`,
+      response: responseText,
+      durationMs: result?.result?.meta?.durationMs || null,
+      model: result?.result?.meta?.agentMeta?.model || 'qwen3.5:4b',
+    });
     return;
   }
 

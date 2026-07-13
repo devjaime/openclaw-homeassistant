@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "runtime": "openclaw",
+  "model": "ollama/qwen3.5:4b",
+  "contextTokens": 16384,
+  "maxConcurrentAgents": 2,
+  "maxHeavyModels": 1,
+  "localByDefault": true,
+  "agents": [
+    { "id": "lonko", "name": "LONKO", "role": "orchestration", "tools": ["sessions", "memory", "agents", "files"] },
+    { "id": "kimun", "name": "KIMÜN", "role": "memory", "tools": ["memory", "files"] },
+    { "id": "pillan", "name": "PILLÁN", "role": "engineering", "tools": ["coding"], "denied": ["message", "cron", "gateway", "nodes"] },
+    { "id": "antu", "name": "ANTÜ", "role": "career", "tools": ["web", "memory", "files"] },
+    { "id": "ruka", "name": "RUKA", "role": "finance", "tools": ["memory", "files"] },
+    { "id": "kume", "name": "KÜME", "role": "sustainability", "tools": ["memory", "files"] },
+    { "id": "werken", "name": "WERKÉN", "role": "communication", "tools": ["web", "memory", "files"] },
+    { "id": "weichafe", "name": "WEICHAFE", "role": "audit", "tools": ["runtime", "memory", "read"] }
+  ],
+  "approvalRequired": ["push", "pull_request", "deployment", "messages", "calendar", "publication"],
+  "prohibited": ["financial_transactions", "credit_requests", "medical_changes", "irreversible_deletion"]
+}
