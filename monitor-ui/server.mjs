@@ -3530,19 +3530,19 @@ const server = http.createServer(async (req, res) => {
         role: 'Principal', model: 'qwen3.5:4b', quantization: 'Q4_K_M', downloadGb: 3.4,
         ramEstimateGb: 5.5, practicalContext: '16K–32K', fit: 'Cómodo en 16 GB',
         strengths: ['Código y razonamiento', 'Tool calling', 'Multimodal', 'Español'],
-        command: 'ollama pull qwen3.5:4b', runCommand: 'OLLAMA_CONTEXT_LENGTH=16384 ollama run qwen3.5:4b',
+        command: 'ollama pull qwen3.5:4b', runCommand: 'OLLAMA_CONTEXT_LENGTH=4096 ollama run qwen3.5:4b',
       },
       {
         role: 'Rápido', model: 'qwen3.5:2b', quantization: 'Q4_K_M', downloadGb: 2.7,
         ramEstimateGb: 4.2, practicalContext: '16K–32K', fit: 'Muy cómodo en 16 GB',
         strengths: ['Baja latencia', 'Autocompletado', 'Consultas rápidas', 'Tool calling'],
-        command: 'ollama pull qwen3.5:2b', runCommand: 'OLLAMA_CONTEXT_LENGTH=16384 ollama run qwen3.5:2b',
+        command: 'ollama pull qwen3.5:2b', runCommand: 'OLLAMA_CONTEXT_LENGTH=4096 ollama run qwen3.5:2b',
       },
       {
         role: 'Código', model: 'qwen2.5-coder:7b', quantization: 'Q4_K_M', downloadGb: 4.7,
         ramEstimateGb: 7.2, practicalContext: '8K–16K', fit: 'Cómodo en 16 GB',
         strengths: ['Go/Python/TypeScript', 'Corrección de bugs', 'SQL', 'Tests'],
-        command: 'ollama pull qwen2.5-coder:7b', runCommand: 'OLLAMA_CONTEXT_LENGTH=16384 ollama run qwen2.5-coder:7b',
+        command: 'ollama pull qwen2.5-coder:7b', runCommand: 'OLLAMA_CONTEXT_LENGTH=4096 ollama run qwen2.5-coder:7b',
       },
     ];
     sendJson(res, 200, {
@@ -3566,8 +3566,8 @@ const server = http.createServer(async (req, res) => {
       recommendations,
       runtimeRecommendation: {
         selected: 'Ollama',
-        reason: `Ya instalado, API estable e integración directa. Con ${swapUsedMb.toFixed(0)} MB de swap actual se recomienda Qwen 3.5 4B y solo un modelo cargado.`,
-        settings: { contextLength: 16384, temperature: 0.2, topP: 0.9, keepAlive: '5m', maxLoadedModels: 1, flashAttention: true, kvCache: 'q8_0' },
+        reason: `Ya instalado, API estable e integración directa. Con ${swapUsedMb.toFixed(0)} MB de swap actual se recomienda Qwen 3.5 4B, contexto 4K y solo un modelo cargado.`,
+        settings: { contextLength: 4096, temperature: 0.2, topP: 0.9, keepAlive: '5m', maxLoadedModels: 1, flashAttention: true, kvCache: 'q8_0' },
       },
       avoidModels: [
         { model: 'qwen3-coder:30b', reason: '19 GB de pesos; no cabe productivamente en 16 GB.' },
