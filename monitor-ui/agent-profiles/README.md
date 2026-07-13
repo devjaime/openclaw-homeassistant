@@ -26,3 +26,9 @@ The larger context is required for OpenClaw's system prompt and tool schemas. Ol
 6. send one final reviewed summary to the authorized Telegram chat.
 
 Scheduling, file writes and Telegram delivery are deterministic Node operations. They do not depend on local-model tool calling.
+
+## Safe Alexa voice
+
+`scripts/aylen-voice.mjs` is the deterministic AYLÉN privacy gate. It requires an existing evidence file, `PUBLIC_SAFE` content, 6–35 words, a weekday 09:00–19:00 window, verified presence, Alexa DND off, a four-hour cooldown and a maximum of three spoken events per day. Financial, medical, corporate, secret and local-path content is rejected.
+
+`scripts/lonko-alexa-summary.mjs` prepares only fixed, evidence-backed start/close templates. The LaunchAgent runs at 09:15 and 18:15 on weekdays. When Home Assistant cannot verify presence, it fails closed and does not speak.

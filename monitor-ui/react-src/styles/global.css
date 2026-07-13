@@ -312,7 +312,7 @@ body {
 .lonko-daily-status { display: grid; grid-template-columns: 1fr 1.2fr; gap: 18px; margin-top: 12px; border-left: 3px solid #22c55e; }
 .lonko-daily-status h3 { margin: 8px 0 4px; }
 .lonko-daily-status p { color: var(--color-text-subtle); font-size: 10px; }
-.lonko-daily-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.lonko-daily-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
 .lonko-daily-metrics span { display: flex; flex-direction: column; justify-content: center; padding: 8px; border-radius: 7px; background: #242837; color: #e4e4e7; font-size: 10px; }
 .lonko-daily-metrics small { margin-bottom: 3px; color: #71717a; font-size: 8px; text-transform: uppercase; }
 .potential-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }

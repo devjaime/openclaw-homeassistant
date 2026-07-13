@@ -3210,6 +3210,15 @@ const server = http.createServer(async (req, res) => {
       } catch { return null; }
     };
     const launchAgent = runShell(`launchctl print gui/$(id -u)/com.devjaime.lonko-daily`, 5000);
+    const alexaAgent = runShell(`launchctl print gui/$(id -u)/com.devjaime.lonko-alexa`, 5000);
+    const voiceEventsPath = path.join(process.env.HOME || '', '.openclaw', 'voice', 'events.jsonl');
+    let lastVoiceEvent = null;
+    try { const lines = fs.readFileSync(voiceEventsPath, 'utf8').split('\n').filter(Boolean); lastVoiceEvent = safeJsonParse(lines.at(-1), null); } catch {}
+    const [alexaPlayer, alexaDnd, presence] = await Promise.all([
+      haApi('/api/states/media_player.echo_dot_de_jaime'),
+      haApi('/api/states/switch.echo_dot_de_jaime_do_not_disturb'),
+      haApi('/api/states/zone.home'),
+    ]);
     const cfg = await readOpenClawConfig();
     sendJson(res, 200, {
       ok: true,
@@ -3218,6 +3227,15 @@ const server = http.createServer(async (req, res) => {
       schedule: { time: '20:00', timezone: 'America/Santiago', cadence: 'daily' },
       vault: { path: vault, available: fs.existsSync(vault), latestInbox: latestFile('Inbox'), latestAudit: latestFile('Audits'), latestDaily: latestFile('Daily') },
       telegram: { configured: Boolean(cfg?.channels?.telegram?.enabled), target: '1540433103', delivery: 'one reviewed summary per day' },
+      alexa: {
+        installed: alexaAgent.ok,
+        schedule: ['09:15 weekdays', '18:15 weekdays'],
+        deviceAvailable: alexaPlayer.ok && alexaPlayer.data?.state !== 'unavailable',
+        doNotDisturb: alexaDnd.ok ? alexaDnd.data?.state !== 'off' : null,
+        presenceVerified: presence.ok ? Number(presence.data?.state) > 0 : false,
+        lastEvent: lastVoiceEvent ? { id: lastVoiceEvent.event_id, spoken: lastVoiceEvent.spoken, timestamp: lastVoiceEvent.timestamp, sensitivity: lastVoiceEvent.sensitivity } : null,
+        policy: 'AYLÉN PUBLIC_SAFE, max 3/day, 4h cooldown',
+      },
       strategy: 'deterministic-specialist-audit-consolidate',
     });
     return;

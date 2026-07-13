@@ -13,6 +13,14 @@
     "obsidianVault": "~/Documents/Obsidian Vault/LONKO",
     "telegramDelivery": "one reviewed summary"
   },
+  "alexaVoice": {
+    "sanitizer": "AYLÉN",
+    "times": ["09:15 weekdays", "18:15 weekdays"],
+    "maxPerDay": 3,
+    "cooldownHours": 4,
+    "sensitivity": "PUBLIC_SAFE",
+    "failClosedWithoutPresence": true
+  },
   "agents": [
     { "id": "lonko", "name": "LONKO", "role": "orchestration", "tools": ["sessions", "memory", "agents", "files"] },
     { "id": "kimun", "name": "KIMÜN", "role": "memory", "tools": ["memory", "files"] },
