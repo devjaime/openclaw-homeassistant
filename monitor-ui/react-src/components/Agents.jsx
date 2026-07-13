@@ -9,34 +9,40 @@ const AGENT_USE_CASES = {
     color: '#6366f1',
     cases: [
       {
-        title: '📱 Bots de Mensajería',
-        description: 'Telegram, Discord, WhatsApp con cron jobs integrados',
-        capabilities: ['cron jobs', 'announce delivery', 'channel auth'],
-        example: 'Bot de reportes matutinos que envía clima, bolsa y noticias a las 6AM'
+        title: '🧭 Routing Multiagente',
+        description: 'Agentes aislados por workspace, remitente y sesión con políticas propias.',
+        capabilities: ['isolated sessions', 'subagents', 'agent send', 'goal tracking'],
+        example: 'LONKO coordina especialistas sin mezclar memoria laboral, financiera o personal.'
       },
       {
-        title: '🔄 Automatizaciones Programadas',
-        description: 'Tareas recurrentes con sesión aislada',
-        capabilities: ['sessionTarget: isolated', 'wakeMode: now', 'error handling'],
-        example: 'Radar SEO que analiza oportunidades de contenido cada día'
+        title: '⏱️ Automatización Persistente',
+        description: 'Cron, webhooks y eventos de heartbeat con historial y entrega multicanal.',
+        capabilities: ['persistent cron', 'webhooks', 'wake events', 'run history'],
+        example: 'Revisión semanal que prepara evidencia sin publicar ni enviar nada automáticamente.'
       },
       {
-        title: '🔧 Execuciones de Herramientas',
-        description: 'Ejecuta scripts, comandos shell, manipula archivos',
-        capabilities: ['exec tool', 'shell commands', 'file operations'],
-        example: 'Actualiza blog, hace git commit/push, procesa datos'
+        title: '🧰 Tools, Skills y Plugins',
+        description: 'Acciones tipadas, workflows reutilizables y extensiones con políticas de acceso.',
+        capabilities: ['tool search', 'skills', 'MCP', 'plugins', 'approvals'],
+        example: 'PILLÁN descubre la herramienta mínima, implementa y deja pruebas verificables.'
       },
       {
-        title: '📊 Monitor & DevOps',
-        description: 'Monitoreo de servicios, alertas, logs',
-        capabilities: ['docker status', 'health checks', 'log analysis'],
-        example: 'Dashboard de estado de servicios con Neo4j Memory'
+        title: '🧠 Memoria Durable',
+        description: 'Memoria Markdown, diarios, DREAMS y búsqueda/indexación QMD con ownership.',
+        capabilities: ['MEMORY.md', 'daily memory', 'QMD', 'dreaming', 'compaction'],
+        example: 'KIMÜN relaciona decisiones, proyectos y aprendizajes con trazabilidad local.'
       },
       {
-        title: '🎯 Agents Especializados',
-        description: 'Sub-agents para tareas específicas con fallback',
-        capabilities: ['multi-agent', 'delegation', 'fallback models'],
-        example: 'Agente de coding que usa deepseek-coder con fallback a cloud'
+        title: '🌐 Browser, Nodos y Canvas',
+        description: 'Navegador aislado, dispositivos pareados y superficies visuales A2UI.',
+        capabilities: ['browser control', 'mobile nodes', 'Canvas', 'camera', 'voice'],
+        example: 'Automatizar investigación web con navegador separado del perfil personal.'
+      },
+      {
+        title: '🔐 Runtime y Privacidad',
+        description: 'Proveedores cloud o locales, sandbox, allowlists y aprobación por herramienta.',
+        capabilities: ['Ollama', 'LM Studio', 'tool policy', 'sandbox', 'OAuth'],
+        example: 'Código y datos sensibles permanecen locales con Qwen 3.5 en Ollama.'
       }
     ]
   },
@@ -47,34 +53,40 @@ const AGENT_USE_CASES = {
     color: '#10b981',
     cases: [
       {
-        title: '🧠 Memoria Persistente',
-        description: 'Aprende de interacciones pasadas, recuerda contexto',
-        capabilities: ['memory engine', 'user profiling', 'context compression'],
-        example: 'Recuerdan preferencias del usuario across sesiones'
+        title: '✅ Goals con Evidencia',
+        description: 'Contratos de finalización y verificación real antes de declarar una tarea lista.',
+        capabilities: ['/goal', 'completion contracts', 'pre_verify', 'evidence ledger'],
+        example: 'Un cambio termina cuando build y tests pasan, no cuando el agente lo afirma.'
       },
       {
-        title: '🎓 Skills & Aprendizaje',
-        description: 'Skills descargables, aprendizaje de procesos',
-        capabilities: ['skills hub', 'skill creation', 'process learning'],
-        example: 'Skill que aprende a hacer research técnico en 3 pasos'
+        title: '🎓 Aprendizaje Visible',
+        description: 'Convierte procesos en skills y permite revisar la evolución de memoria.',
+        capabilities: ['/learn', '/journey', 'memory graph', 'skill distillation'],
+        example: 'Transformar un workflow de auditoría en una skill reutilizable y editable.'
       },
       {
-        title: '🌐 Web Research',
-        description: 'Búsqueda web, extracción de contenido, análisis',
-        capabilities: ['Exa search', 'web extraction', 'content analysis'],
-        example: 'Investigar últimas tendencias en AI agents para blog'
+        title: '🧠 Mixture of Agents',
+        description: 'Presets seleccionables que contrastan varios modelos y agregan una respuesta.',
+        capabilities: ['MoA presets', 'streaming synthesis', 'trace JSONL', 'model council'],
+        example: 'WEICHAFE contrasta una decisión arquitectónica con varias perspectivas.'
       },
       {
-        title: '🖥️ Browser Automation',
-        description: 'Navegación automática, formularios, scraping',
-        capabilities: ['agent-browser', 'Browserbase', 'stealth mode'],
-        example: 'Automatizar tareas repetitivas en la web'
+        title: '⚡ Delegación en Background',
+        description: 'Fan-out de subagentes sin bloquear el chat y retorno consolidado.',
+        capabilities: ['delegate_task', 'background fan-out', 'status tracking', 'handoff'],
+        example: 'Investigar fuentes independientes y consolidarlas en un único reporte.'
       },
       {
-        title: '📚 Investigación Técnica',
-        description: 'Deep dive en documentación, código, specs',
-        capabilities: ['context understanding', 'code analysis', 'docs parsing'],
-        example: 'Analizar documentación de API y generar ejemplos'
+        title: '💻 Coding Cockpit',
+        description: 'Proyectos, worktrees, revisión, terminales y diagnósticos LSP integrados.',
+        capabilities: ['projects', 'git worktrees', 'PR diffs', 'multi-terminal', 'LSP'],
+        example: 'PILLÁN trabaja en una rama aislada y WEICHAFE revisa el diff y la evidencia.'
+      },
+      {
+        title: '🛡️ Gateway Resiliente',
+        description: 'Backups, restore, scale-to-zero, drain seguro y límites de concurrencia.',
+        capabilities: ['backup/import', 'safe drain', 'scale-to-zero', 'run caps'],
+        example: 'Actualizar o reiniciar sin perder conversaciones que estén en curso.'
       }
     ]
   }
@@ -124,6 +136,29 @@ const AI_ENGINEER_CONCEPT = {
     { phase: 'Fase 3', title: 'Memoria & Learning', tasks: ['Implement RAG', 'Design memory systems', 'Build agents'] },
     { phase: 'Fase 4', title: 'Optimización', tasks: ['Cost optimization', 'Performance tuning', 'Scale architectures'] }
   ]
+};
+
+const LONKO_SYSTEM = {
+  mission: 'Aumentar tu capacidad profesional y personal sin aumentar tu carga, convirtiendo objetivos en entregables verificables.',
+  agents: [
+    { name: 'LONKO', role: 'Orquestación y prioridades', color: '#8b5cf6', outcomes: ['máximo 3 proyectos activos', 'tareas con evidencia', 'aprobaciones sensibles'] },
+    { name: 'KIMÜN', role: 'Memoria y conocimiento', color: '#06b6d4', outcomes: ['mapa Obsidian/Neo4j', 'decisiones y contexto', 'resúmenes mínimos'] },
+    { name: 'PILLÁN', role: 'Ingeniería, arquitectura e IA', color: '#3b82f6', outcomes: ['software probado', 'benchmarks locales', 'arquitectura reutilizable'] },
+    { name: 'ANTÜ', role: 'Carrera, inglés y certificación', color: '#f59e0b', outcomes: ['skill map', 'portafolio con evidencia', 'práctica sostenible'] },
+    { name: 'RUKA', role: 'Finanzas y patrimonio', color: '#22c55e', outcomes: ['escenarios, no certezas', 'control de caja', 'sin operaciones automáticas'] },
+    { name: 'KÜME', role: 'Salud y energía', color: '#ec4899', outcomes: ['límite de carga', 'semáforo diario', 'recuperación protegida'] },
+    { name: 'WERKÉN', role: 'Marca y comunicación', color: '#f97316', outcomes: ['borradores técnicos', 'narrativa profesional', 'publicación con aprobación'] },
+    { name: 'WEICHAFE', role: 'Riesgo, calidad y auditoría', color: '#ef4444', outcomes: ['verificación final', 'privacidad', 'rollback y evidencia'] },
+  ],
+  opportunities: [
+    { priority: 'P1', title: 'Estabilidad profesional', value: 'Registrar logros, decisiones y arquitectura para CV, entrevistas y liderazgo técnico.', deliverable: 'Bitácora semanal + evidencia profesional' },
+    { priority: 'P2', title: 'AI Systems Engineering', value: 'Construir routing local/cloud, RAG, MCP, evaluación y observabilidad con Go/Python.', deliverable: 'Demo, benchmark o componente por ciclo' },
+    { priority: 'P2', title: 'Inglés y Google Cloud', value: 'Prácticas breves sobre backend, cloud e IA conectadas con proyectos reales.', deliverable: 'Sesiones de 15–30 min + registro de brechas' },
+    { priority: 'P3', title: 'Ingresos especializados', value: 'Consultoría en automatización, agentes, backend, procesos financieros y datos.', deliverable: 'Oferta acotada y caso de estudio anonimizado' },
+    { priority: 'P3', title: 'Marca y activos propios', value: 'Convertir aprendizajes de IA local, Go, RAG y MCP en contenido y productos.', deliverable: 'Un repositorio, artículo o skill terminado' },
+    { priority: 'P1', title: 'Sostenibilidad', value: 'Ajustar la carga a energía, familia y responsabilidades; evitar dispersión.', deliverable: '1 principal + 1 experimento + 1 contenido' },
+  ],
+  limits: ['2 agentes paralelos como máximo', '1 modelo pesado cargado', 'Qwen 3.5 4B · contexto 4K', 'local por defecto', 'Nivel 3 requiere aprobación', 'finanzas y publicaciones nunca automáticas'],
 };
 
 function CaseCard({ case: c, platformColor }) {
@@ -178,7 +213,10 @@ function PillarCard({ pillar }) {
 }
 
 export default function Agents() {
-  const [activeTab, setActiveTab] = useState('openclaw');
+  const [activeTab, setActiveTab] = useState(() => {
+    const requested = new URLSearchParams(window.location.search).get('agentTab');
+    return ['openclaw', 'hermes', 'aiengineer', 'potential'].includes(requested) ? requested : 'openclaw';
+  });
   const [hermesStatus, setHermesStatus] = useState(null);
   const [openclawStatus, setOpenclawStatus] = useState(null);
 
@@ -200,6 +238,7 @@ export default function Agents() {
 
   const renderOpenClaw = () => (
     <div>
+      <div className="agent-release-banner openclaw-release"><div><span>Disponible estable</span><strong>OpenClaw 2026.6.11</strong><p>Continuidad de memoria/QMD, Tool Search más fiable, browser optimizado y cron más robusto.</p></div><a href="https://docs.openclaw.ai/releases/2026.6.11" target="_blank" rel="noreferrer">Notas oficiales ↗</a></div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '16px' }}>
         {AGENT_USE_CASES.openclaw.cases.map((c, i) => (
           <CaseCard key={i} case={c} platformColor={AGENT_USE_CASES.openclaw.color} />
@@ -220,6 +259,7 @@ export default function Agents() {
 
   const renderHermes = () => (
     <div>
+      <div className="agent-release-banner hermes-release"><div><span>Disponible estable</span><strong>Hermes Agent v0.18.2</strong><p>Goals verificables, /learn, /journey, memory graph, MoA, fan-out y coding projects.</p></div><a href="https://github.com/NousResearch/hermes-agent/releases/tag/v2026.7.7.2" target="_blank" rel="noreferrer">Notas oficiales ↗</a></div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '16px' }}>
         {AGENT_USE_CASES.hermes.cases.map((c, i) => (
           <CaseCard key={i} case={c} platformColor={AGENT_USE_CASES.hermes.color} />
@@ -301,6 +341,20 @@ export default function Agents() {
     </div>
   );
 
+  const renderPotential = () => (
+    <div className="lonko-potential">
+      <section className="card lonko-hero">
+        <div><span className="metric-label">Sistema personal propuesto</span><h2>LONKO · capacidad coordinada</h2><p>{LONKO_SYSTEM.mission}</p></div>
+        <div className="lonko-resource-summary">{LONKO_SYSTEM.limits.map((limit) => <span key={limit}>{limit}</span>)}</div>
+      </section>
+      <div className="potential-heading"><div><h3>Equipo especializado</h3><p>Cada agente tiene un dominio, un límite y resultados esperados.</p></div><span>8 roles · autonomía controlada</span></div>
+      <div className="lonko-agent-grid">{LONKO_SYSTEM.agents.map((agent) => <article key={agent.name} className="card lonko-agent" style={{ '--agent-color': agent.color }}><strong>{agent.name}</strong><h4>{agent.role}</h4><ul>{agent.outcomes.map((outcome) => <li key={outcome}>{outcome}</li>)}</ul></article>)}</div>
+      <div className="potential-heading"><div><h3>Potencial aplicado a tus características</h3><p>Software + datos + procesos financieros + conocimiento empresarial + IA.</p></div><span>prioridad antes que volumen</span></div>
+      <div className="potential-grid">{LONKO_SYSTEM.opportunities.map((item) => <article key={item.title} className="card potential-card"><div><span className={`priority-badge priority-${item.priority.toLowerCase()}`}>{item.priority}</span><h4>{item.title}</h4></div><p>{item.value}</p><small>Entregable</small><strong>{item.deliverable}</strong></article>)}</div>
+      <section className="card operating-loop"><h3>Ciclo operativo seguro</h3><div><span><b>1</b> Observar</span><span><b>2</b> Priorizar</span><span><b>3</b> Delegar</span><span><b>4</b> Ejecutar</span><span><b>5</b> Verificar</span><span><b>6</b> Consolidar</span></div><p>Una tarea solo termina cuando existe archivo, prueba, commit, cálculo, reporte o checklist verificable.</p></section>
+    </div>
+  );
+
   return (
     <div className="section">
       <header className="dashboard-header">
@@ -314,7 +368,8 @@ export default function Agents() {
         {[
           { id: 'openclaw', label: '⚡ OpenClaw', color: '#6366f1' },
           { id: 'hermes', label: '🧠 Hermes', color: '#10b981' },
-          { id: 'aiengineer', label: '🚀 AI Engineer', color: '#f59e0b' }
+          { id: 'aiengineer', label: '🚀 AI Engineer', color: '#f59e0b' },
+          { id: 'potential', label: '🧭 Mi potencial', color: '#8b5cf6' }
         ].map(tab => (
           <button
             key={tab.id}
@@ -338,6 +393,7 @@ export default function Agents() {
       {activeTab === 'openclaw' && renderOpenClaw()}
       {activeTab === 'hermes' && renderHermes()}
       {activeTab === 'aiengineer' && renderAIEngineer()}
+      {activeTab === 'potential' && renderPotential()}
     </div>
   );
 }
