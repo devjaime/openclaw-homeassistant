@@ -3198,6 +3198,31 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ── Multi-Agent: agents, sessions, subagents, spawn ──────────────────────────
+  if (u.pathname === '/api/lonko/daily' && req.method === 'GET') {
+    const vault = path.join(process.env.HOME || '', 'Documents', 'Obsidian Vault', 'LONKO');
+    const latestFile = (folder) => {
+      try {
+        const dir = path.join(vault, folder);
+        const name = fs.readdirSync(dir).filter((file) => file.endsWith('.md')).sort().at(-1);
+        if (!name) return null;
+        const stat = fs.statSync(path.join(dir, name));
+        return { name, path: path.join(dir, name), updatedAt: stat.mtime.toISOString() };
+      } catch { return null; }
+    };
+    const launchAgent = runShell(`launchctl print gui/$(id -u)/com.devjaime.lonko-daily`, 5000);
+    const cfg = await readOpenClawConfig();
+    sendJson(res, 200, {
+      ok: true,
+      installed: launchAgent.ok,
+      running: /state = running/.test(launchAgent.output),
+      schedule: { time: '20:00', timezone: 'America/Santiago', cadence: 'daily' },
+      vault: { path: vault, available: fs.existsSync(vault), latestInbox: latestFile('Inbox'), latestAudit: latestFile('Audits'), latestDaily: latestFile('Daily') },
+      telegram: { configured: Boolean(cfg?.channels?.telegram?.enabled), target: '1540433103', delivery: 'one reviewed summary per day' },
+      strategy: 'deterministic-specialist-audit-consolidate',
+    });
+    return;
+  }
+
   if (u.pathname === '/api/multiagent/agents' && req.method === 'GET') {
     const openclawCli = fs.existsSync(OPENCLAW_UPDATE_BIN) ? OPENCLAW_UPDATE_BIN : OPENCLAW_BIN;
     const out = runShell(`"${openclawCli}" agents list --json`, 10000);

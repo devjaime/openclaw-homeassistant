@@ -221,20 +221,23 @@ export default function Agents() {
   const [openclawStatus, setOpenclawStatus] = useState(null);
   const [runtimeAgents, setRuntimeAgents] = useState([]);
   const [runtimeSessions, setRuntimeSessions] = useState([]);
+  const [dailyStatus, setDailyStatus] = useState(null);
 
   useEffect(() => {
     async function fetchStatuses() {
       try {
-        const [oc, hm, agentData, sessionData] = await Promise.all([
+        const [oc, hm, agentData, sessionData, dailyData] = await Promise.all([
           fetchOpenClawStatus(),
           fetchHermesStatus().catch(() => null),
           fetch('/api/multiagent/agents', { cache: 'no-store' }).then((response) => response.json()).catch(() => ({ agents: [] })),
           fetch('/api/multiagent/sessions?limit=50', { cache: 'no-store' }).then((response) => response.json()).catch(() => ({ sessions: [] })),
+          fetch('/api/lonko/daily', { cache: 'no-store' }).then((response) => response.json()).catch(() => null),
         ]);
         setOpenclawStatus(oc);
         setHermesStatus(hm);
         setRuntimeAgents(agentData.agents || []);
         setRuntimeSessions(sessionData.sessions || []);
+        setDailyStatus(dailyData);
       } catch (e) {
         console.error(e);
       }
@@ -356,6 +359,7 @@ export default function Agents() {
       <div className="potential-heading"><div><h3>Equipo especializado</h3><p>Cada agente tiene un dominio, un límite y resultados esperados.</p></div><span>8 roles · autonomía controlada</span></div>
       <div className="lonko-agent-grid">{LONKO_SYSTEM.agents.map((agent) => { const id = agent.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase(); const live = runtimeAgents.find((item) => item.id === id); const sessions = runtimeSessions.filter((session) => session.agentId === id); return <article key={agent.name} className={`card lonko-agent ${live ? 'agent-configured' : ''}`} style={{ '--agent-color': agent.color }}><div className="lonko-agent-status"><strong>{agent.name}</strong><span className={`status-badge status-${live ? 'ok' : 'warn'}`}>{live ? 'CONFIGURADO' : 'PENDIENTE'}</span></div><h4>{agent.role}</h4><ul>{agent.outcomes.map((outcome) => <li key={outcome}>{outcome}</li>)}</ul><footer><span>{live?.model || 'Sin modelo'}</span><span>{sessions.length} sesiones</span></footer></article>; })}</div>
       <div className="lonko-runtime-note"><strong>Estado real</strong><span>Los perfiles existen en OpenClaw con workspace, memoria, sesiones y políticas independientes. La ejecución se realiza bajo demanda desde Multi-Agente; no son procesos permanentes.</span><button className="btn-primary" onClick={() => { window.location.hash = 'multiagent'; }}>Abrir consola Multi-Agente</button></div>
+      <section className="card lonko-daily-status"><div><span className={`status-badge status-${dailyStatus?.installed && dailyStatus?.vault?.available && dailyStatus?.telegram?.configured ? 'ok' : 'warn'}`}>{dailyStatus?.installed ? 'AUTOMATIZACIÓN ACTIVA' : 'NO INSTALADA'}</span><h3>Ciclo diario semiautónomo</h3><p>Especialista rotativo → auditoría WEICHAFE → consolidación LONKO → Telegram.</p></div><div className="lonko-daily-metrics"><span><small>Horario</small>{dailyStatus?.schedule?.time || '20:00'} · Santiago</span><span><small>Obsidian</small>{dailyStatus?.vault?.latestDaily?.name || 'Sin reporte'}</span><span><small>Telegram</small>{dailyStatus?.telegram?.configured ? 'Resumen diario' : 'No configurado'}</span></div></section>
       <div className="potential-heading"><div><h3>Potencial aplicado a tus características</h3><p>Software + datos + procesos financieros + conocimiento empresarial + IA.</p></div><span>prioridad antes que volumen</span></div>
       <div className="potential-grid">{LONKO_SYSTEM.opportunities.map((item) => <article key={item.title} className="card potential-card"><div><span className={`priority-badge priority-${item.priority.toLowerCase()}`}>{item.priority}</span><h4>{item.title}</h4></div><p>{item.value}</p><small>Entregable</small><strong>{item.deliverable}</strong></article>)}</div>
       <section className="card operating-loop"><h3>Ciclo operativo seguro</h3><div><span><b>1</b> Observar</span><span><b>2</b> Priorizar</span><span><b>3</b> Delegar</span><span><b>4</b> Ejecutar</span><span><b>5</b> Verificar</span><span><b>6</b> Consolidar</span></div><p>Una tarea solo termina cuando existe archivo, prueba, commit, cálculo, reporte o checklist verificable.</p></section>

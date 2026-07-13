@@ -13,3 +13,16 @@ Operational constraints:
 - external actions require explicit human approval.
 
 The larger context is required for OpenClaw's system prompt and tool schemas. Ollama still keeps only one model loaded.
+
+## Daily cycle
+
+`scripts/lonko-daily.mjs` runs sequentially at 20:00 America/Santiago through the macOS LaunchAgent in `scripts/com.devjaime.lonko-daily.plist`:
+
+1. select one specialist using a weekday rotation;
+2. execute that isolated OpenClaw profile with Ollama;
+3. ask WEICHAFE to audit the returned evidence;
+4. ask LONKO to consolidate the reviewed result;
+5. atomically write Inbox, Audits and Daily Markdown notes to the Obsidian vault;
+6. send one final reviewed summary to the authorized Telegram chat.
+
+Scheduling, file writes and Telegram delivery are deterministic Node operations. They do not depend on local-model tool calling.

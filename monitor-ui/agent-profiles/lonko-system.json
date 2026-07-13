@@ -6,6 +6,13 @@
   "maxConcurrentAgents": 2,
   "maxHeavyModels": 1,
   "localByDefault": true,
+  "dailyCycle": {
+    "time": "20:00",
+    "timezone": "America/Santiago",
+    "scheduler": "launchd",
+    "obsidianVault": "~/Documents/Obsidian Vault/LONKO",
+    "telegramDelivery": "one reviewed summary"
+  },
   "agents": [
     { "id": "lonko", "name": "LONKO", "role": "orchestration", "tools": ["sessions", "memory", "agents", "files"] },
     { "id": "kimun", "name": "KIMÜN", "role": "memory", "tools": ["memory", "files"] },
