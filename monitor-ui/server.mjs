@@ -3451,9 +3451,10 @@ const server = http.createServer(async (req, res) => {
 
   // ── Local models: Ollama + hardware compatibility ─────────────────────────────
   if (u.pathname === '/api/models/local' && req.method === 'GET') {
-    const [tagsData, psData] = await Promise.all([
+    const [tagsData, psData, lmStudioData] = await Promise.all([
       fetchOllamaJson('/api/tags'),
       fetchOllamaJson('/api/ps'),
+      fetch('http://127.0.0.1:1234/api/v1/models', { signal: AbortSignal.timeout(2000) }).then((response) => response.ok ? response.json() : null).catch(() => null),
     ]);
     const ollamaRunning = tagsData !== null;
     const ollamaModelsPath = path.join(process.env.HOME || '', '.ollama', 'models');
@@ -3484,6 +3485,17 @@ const server = http.createServer(async (req, res) => {
       sizeVram: parseFloat((m.size_vram / 1_073_741_824).toFixed(2)),
       expiresAt: m.expires_at,
     }));
+    const lmStudioModels = (lmStudioData?.models || []).filter((model) => model.type === 'llm').map((model) => ({
+      name: model.display_name || model.key,
+      id: model.key,
+      runtime: 'LM Studio',
+      sizeGb: model.size_bytes ? parseFloat((model.size_bytes / 1_073_741_824).toFixed(2)) : null,
+      parameterSize: model.params_string || '',
+      quantization: model.quantization?.name || '',
+      architecture: model.architecture || '',
+      loaded: Array.isArray(model.loaded_instances) && model.loaded_instances.length > 0,
+      instances: (model.loaded_instances || []).map((instance) => ({ id: instance.id, contextLength: instance.config?.context_length || 0, flashAttention: instance.config?.flash_attention || false })),
+    }));
     // System hardware info
     let totalRamGb = null;
     let cpuBrand = '';
@@ -3509,6 +3521,30 @@ const server = http.createServer(async (req, res) => {
       const isLoaded = runningModels.some((r) => r.name === m.name);
       return { ...m, canRun, warning, isLoaded };
     });
+    const memoryPressure = runShell('memory_pressure 2>/dev/null | tail -1', 5000);
+    const swapUsage = runShell('sysctl -n vm.swapusage', 3000);
+    const pressurePercent = Number(String(memoryPressure.output || '').match(/([0-9.]+)%/)?.[1] || 0);
+    const swapUsedMb = Number(String(swapUsage.output || '').match(/used = ([0-9.]+)M/)?.[1] || 0);
+    const recommendations = [
+      {
+        role: 'Principal', model: 'qwen3.5:4b', quantization: 'Q4_K_M', downloadGb: 3.4,
+        ramEstimateGb: 5.5, practicalContext: '16K–32K', fit: 'Cómodo en 16 GB',
+        strengths: ['Código y razonamiento', 'Tool calling', 'Multimodal', 'Español'],
+        command: 'ollama pull qwen3.5:4b', runCommand: 'OLLAMA_CONTEXT_LENGTH=16384 ollama run qwen3.5:4b',
+      },
+      {
+        role: 'Rápido', model: 'qwen3.5:2b', quantization: 'Q4_K_M', downloadGb: 2.7,
+        ramEstimateGb: 4.2, practicalContext: '16K–32K', fit: 'Muy cómodo en 16 GB',
+        strengths: ['Baja latencia', 'Autocompletado', 'Consultas rápidas', 'Tool calling'],
+        command: 'ollama pull qwen3.5:2b', runCommand: 'OLLAMA_CONTEXT_LENGTH=16384 ollama run qwen3.5:2b',
+      },
+      {
+        role: 'Código', model: 'qwen2.5-coder:7b', quantization: 'Q4_K_M', downloadGb: 4.7,
+        ramEstimateGb: 7.2, practicalContext: '8K–16K', fit: 'Cómodo en 16 GB',
+        strengths: ['Go/Python/TypeScript', 'Corrección de bugs', 'SQL', 'Tests'],
+        command: 'ollama pull qwen2.5-coder:7b', runCommand: 'OLLAMA_CONTEXT_LENGTH=16384 ollama run qwen2.5-coder:7b',
+      },
+    ];
     sendJson(res, 200, {
       ok: true,
       ollamaRunning,
@@ -3516,10 +3552,35 @@ const server = http.createServer(async (req, res) => {
       ollamaDiskUsed: ollamaDiskGb,
       models: modelsWithCompat,
       runningModels,
+      lmStudio: { running: lmStudioData !== null, url: 'http://127.0.0.1:1234', models: lmStudioModels, loadedCount: lmStudioModels.filter((model) => model.loaded).length },
       storage,
       diagnostic: !storage.available && storage.external
         ? `El volumen externo de modelos no está disponible: ${storage.target}`
         : !ollamaRunning ? 'Ollama está instalado pero no está ejecutándose' : installedModels.length === 0 ? 'Ollama está operativo, sin modelos descargados' : '',
+      systemMemory: {
+        totalGb: totalRamGb,
+        availablePercent: pressurePercent,
+        pressure: pressurePercent >= 50 ? 'normal' : pressurePercent >= 25 ? 'elevated' : 'critical',
+        swapUsedMb,
+      },
+      recommendations,
+      runtimeRecommendation: {
+        selected: 'Ollama',
+        reason: `Ya instalado, API estable e integración directa. Con ${swapUsedMb.toFixed(0)} MB de swap actual se recomienda Qwen 3.5 4B y solo un modelo cargado.`,
+        settings: { contextLength: 16384, temperature: 0.2, topP: 0.9, keepAlive: '5m', maxLoadedModels: 1, flashAttention: true, kvCache: 'q8_0' },
+      },
+      avoidModels: [
+        { model: 'qwen3-coder:30b', reason: '19 GB de pesos; no cabe productivamente en 16 GB.' },
+        { model: 'devstral:24b', reason: '14 GB de pesos y recomendado oficialmente para Mac con 32 GB.' },
+        { model: 'glm-4.7-flash', reason: '19 GB Q4; no deja margen para macOS, KV cache y aplicaciones.' },
+        { model: 'qwen3.5:27b+', reason: '17 GB o más antes del contexto; provocaría swap severo.' },
+      ],
+      researchSources: [
+        { label: 'Ollama · Qwen 3.5', url: 'https://ollama.com/library/qwen3.5' },
+        { label: 'Ollama · Qwen 2.5 Coder', url: 'https://ollama.com/library/qwen2.5-coder' },
+        { label: 'LM Studio · Apple Silicon', url: 'https://lmstudio.ai/docs/app/system-requirements' },
+        { label: 'LM Studio · Model API', url: 'https://lmstudio.ai/docs/developer/rest/list' },
+      ],
     });
     return;
   }

@@ -8,11 +8,20 @@ export default function Models() {
   const [localStatus, setLocalStatus] = useState(null);
   const [providers, setProviders] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('cloud');
+  const [activeTab, setActiveTab] = useState(() => new URLSearchParams(window.location.search).get('modelTab') === 'local' ? 'local' : 'cloud');
 
   useEffect(() => {
     loadModels();
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'local') return undefined;
+    const timer = window.setInterval(async () => {
+      const status = await fetchModelsLocal().catch(() => null);
+      if (status?.ok) { setLocalModels(status.models || []); setLocalStatus(status); }
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [activeTab]);
 
   const loadModels = async () => {
     setLoading(true);
@@ -114,7 +123,17 @@ export default function Models() {
 
       {activeTab === 'local' && (
         <div>
+          <div className="local-runtime-grid">
+            <div className={`card runtime-card ${localStatus?.ollamaRunning ? 'runtime-online' : ''}`}><div className="service-header"><h3>Ollama</h3><span className={`status-badge status-${localStatus?.ollamaRunning ? 'ok' : 'error'}`}>{localStatus?.ollamaRunning ? 'ONLINE' : 'OFFLINE'}</span></div><p>API · 127.0.0.1:11434</p><strong>{localStatus?.runningModels?.length || 0} cargados</strong></div>
+            <div className={`card runtime-card ${localStatus?.lmStudio?.running ? 'runtime-online' : ''}`}><div className="service-header"><h3>LM Studio</h3><span className={`status-badge status-${localStatus?.lmStudio?.running ? 'ok' : 'warn'}`}>{localStatus?.lmStudio?.running ? 'ONLINE' : 'NO INSTALADO'}</span></div><p>API · 127.0.0.1:1234</p><strong>{localStatus?.lmStudio?.loadedCount || 0} cargados</strong></div>
+            <div className="card runtime-card"><div className="service-header"><h3>Memoria unificada</h3><span className={`status-badge status-${localStatus?.systemMemory?.pressure === 'normal' ? 'ok' : 'warn'}`}>{localStatus?.systemMemory?.pressure || '—'}</span></div><p>{localStatus?.systemMemory?.availablePercent || 0}% disponible · swap {Math.round(localStatus?.systemMemory?.swapUsedMb || 0)} MB</p><strong>{localStatus?.systemMemory?.totalGb || 16} GB</strong></div>
+          </div>
+          <div className="card runtime-recommendation"><div><span className="metric-label">Runtime recomendado</span><h3>{localStatus?.runtimeRecommendation?.selected || 'Ollama'}</h3><p>{localStatus?.runtimeRecommendation?.reason}</p></div><div className="runtime-settings">{Object.entries(localStatus?.runtimeRecommendation?.settings || {}).map(([key, value]) => <span key={key}><small>{key}</small>{String(value)}</span>)}</div></div>
+          <h3 className="local-section-title">Modelos recomendados para M4 · 16 GB</h3>
+          <div className="local-recommendations">{(localStatus?.recommendations || []).map((recommendation) => <article key={recommendation.model} className="card recommendation-card"><div className="service-header"><h3>{recommendation.model}</h3><span className="model-badge">{recommendation.role}</span></div><p>{recommendation.fit} · {recommendation.quantization}</p><div className="recommendation-metrics"><span>{recommendation.downloadGb} GB archivo</span><span>~{recommendation.ramEstimateGb} GB RAM</span><span>{recommendation.practicalContext} contexto</span></div><div className="iman-chips">{recommendation.strengths.map((strength) => <span key={strength}>{strength}</span>)}</div><code>{recommendation.command}</code><code>{recommendation.runCommand}</code></article>)}</div>
+          <div className="local-advisory-grid"><div className="card avoid-models"><h3>No recomendados para 16 GB</h3>{(localStatus?.avoidModels || []).map((item) => <div key={item.model}><strong>{item.model}</strong><span>{item.reason}</span></div>)}</div><div className="card local-sources"><h3>Fuentes de la evaluación</h3>{(localStatus?.researchSources || []).map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer">{source.label} ↗</a>)}<p>Recomendación ajustada con métricas locales de memoria y swap.</p></div></div>
           {localStatus?.diagnostic ? <div className="model-diagnostic"><strong>{localStatus.ollamaRunning ? 'Ollama' : 'Motor local no disponible'}</strong><span>{localStatus.diagnostic}</span>{localStatus.storage?.external ? <code>{localStatus.storage.target}</code> : null}</div> : null}
+          <h3 className="local-section-title">Modelos instalados</h3>
           <div className="dashboard-grid">
           {localModels.length === 0 ? (
             <div className="card">
